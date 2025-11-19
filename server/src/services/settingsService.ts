@@ -32,8 +32,8 @@ const wooSchema = z.object({
 async function upsertSetting<T>(key: string, value: T) {
   await prisma.appSettings.upsert({
     where: { key },
-    create: { key, value },
-    update: { value }
+    create: { key, value: value as any },
+    update: { value: value as any }
   });
 }
 

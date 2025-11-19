@@ -10,6 +10,8 @@ const envSchema = z.object({
   ADMIN_API_KEY: z.string().min(1, 'ADMIN_API_KEY is required'),
   CRON_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
+  SUPABASE_KEY: z.string().optional(),
+  SUPABASE_ANON_KEY: z.string().optional(),
   SMTP_HOST: z.string().min(1, 'SMTP_HOST is required'),
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().min(1, 'SMTP_USER is required'),

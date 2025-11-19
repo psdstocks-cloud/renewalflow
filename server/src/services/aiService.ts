@@ -11,9 +11,11 @@ async function callGemini(prompt: string): Promise<string> {
   if (!geminiClient || !env.GEMINI_API_KEY) {
     throw new Error('Gemini API key not configured');
   }
-  const model = geminiClient.getGenerativeModel({ model: 'gemini-1.5-flash' });
-  const response = await model.generateContent(prompt);
-  return response.response.text() ?? '';
+  const response = await geminiClient.models.generateContent({
+    model: 'gemini-1.5-flash',
+    contents: prompt,
+  });
+  return response.text ?? '';
 }
 
 export async function generateReminderEmail(task: ReminderTask, template: EmailTemplateConfig, customInstructions?: string): Promise<ReminderEmailPayload> {
