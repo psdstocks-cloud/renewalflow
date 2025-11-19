@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Subscriber {
+  id              String     @id @default(cuid())
+  name            String
+  email           String     @unique
+  phone           String?
+  planName        String
+  amount          Float
+  currency        String     @default("EGP")
+  pointsRemaining Int        @default(0)
+  status          String
+  startDate       DateTime
+  endDate         DateTime
+  paymentLink     String?
+  lastNotifiedAt  DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  emailLogs       EmailLog[]
+}
+
+model EmailLog {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id])
+  type         String
+  subject      String
+  body         String
+  method       String
+  success      Boolean
+  error        String?
+  sentAt       DateTime   @default(now())
+}
+
+model AppSettings {
+  id    String @id @default(cuid())
+  key   String @unique
+  value Json
+}
