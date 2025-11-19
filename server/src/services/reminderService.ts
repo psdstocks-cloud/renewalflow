@@ -1,6 +1,6 @@
 import { differenceInCalendarDays, isAfter } from 'date-fns';
 import { prisma } from '../config/db';
-import { ReminderTask, ReminderType } from '../types';
+import { ReminderTask, ReminderType } from '../types/index';
 import { getSettings } from './settingsService';
 import { generateReminderEmail } from './aiService';
 import { sendEmail } from './emailService';
@@ -41,6 +41,10 @@ export async function computeReminderTasks(referenceDate = new Date()): Promise<
 }
 
 export async function sendReminderTask(task: ReminderTask, customInstructions?: string) {
+  if (!task.subscriber) {
+    throw new Error('Task subscriber is required');
+  }
+
   const { emailTemplate } = await getSettings();
   const { subject, body } = await generateReminderEmail(task, emailTemplate, customInstructions);
   const emailResult = await sendEmail({ to: task.subscriber.email, subject, html: body });

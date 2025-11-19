@@ -1,5 +1,5 @@
 import { geminiClient } from '../config/gemini';
-import { EmailTemplateConfig, ReminderTask } from '../types';
+import { EmailTemplateConfig, ReminderTask } from '../types/index';
 import { env } from '../config/env';
 
 interface ReminderEmailPayload {

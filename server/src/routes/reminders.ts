@@ -3,6 +3,7 @@ import { authMiddleware } from '../middleware/auth';
 import { computeReminderTasks, sendReminderBatch, sendReminderTask } from '../services/reminderService';
 import { z } from 'zod';
 import { generateWhatsAppSummary } from '../services/aiService';
+import { prisma } from '../config/db';
 
 export const reminderRouter = Router();
 
@@ -57,6 +58,48 @@ reminderRouter.post('/api/reminders/whatsapp-summary', async (req, res, next) =>
     const filtered = taskIds?.length ? tasks.filter((task) => taskIds.includes(task.id)) : tasks;
     const summaryText = await generateWhatsAppSummary(filtered);
     res.json({ summaryText });
+  } catch (error) {
+    next(error);
+  }
+});
+
+reminderRouter.get('/api/reminders/logs', async (req, res, next) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+    
+    const logs = await prisma.emailLog.findMany({
+      take: limit,
+      orderBy: { sentAt: 'desc' },
+      include: {
+        subscriber: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
+
+    // Transform to match frontend expected format
+    const formattedLogs = logs.map(log => ({
+      id: log.id,
+      subscriberId: log.subscriberId,
+      type: log.type,
+      subject: log.subject,
+      body: log.body,
+      method: log.method,
+      success: log.success,
+      error: log.error,
+      sentAt: log.sentAt.toISOString(),
+      subscriber: log.subscriber ? {
+        id: log.subscriber.id,
+        name: log.subscriber.name,
+        email: log.subscriber.email
+      } : undefined
+    }));
+
+    res.json(formattedLogs);
   } catch (error) {
     next(error);
   }

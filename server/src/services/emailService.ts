@@ -21,3 +21,4 @@ export async function sendEmail(payload: SendEmailPayload) {
     return { success: false as const, method: 'SMTP' as const, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
+

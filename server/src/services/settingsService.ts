@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { EmailTemplateConfig, ReminderConfig, SettingsResponse, WhatsAppConfig, WooSettings } from '../types';
+import { EmailTemplateConfig, ReminderConfig, SettingsResponse, WhatsAppConfig, WooSettings } from '../types/index';
 import { z } from 'zod';
 
 const REMINDER_KEY = 'reminderConfig';

@@ -16,6 +16,16 @@ export const subscriberRouter = Router();
 
 subscriberRouter.use(authMiddleware);
 
+subscriberRouter.get('/api/subscribers/stats', async (_req, res, next) => {
+  try {
+    const { reminderConfig } = await getSettings();
+    const stats = await subscriberStats(new Date(), reminderConfig.firstReminderDays);
+    res.json(stats);
+  } catch (error) {
+    next(error);
+  }
+});
+
 subscriberRouter.get('/api/subscribers', async (req, res, next) => {
   try {
     const { status, search, skip, take } = req.query;
@@ -76,16 +86,6 @@ subscriberRouter.post('/api/subscribers/import', async (req, res, next) => {
     const { subscribers } = schema.parse(req.body);
     const summary = await importSubscribers(subscribers as any);
     res.json(summary);
-  } catch (error) {
-    next(error);
-  }
-});
-
-subscriberRouter.get('/api/subscribers/stats', async (_req, res, next) => {
-  try {
-    const { reminderConfig } = await getSettings();
-    const stats = await subscriberStats(new Date(), reminderConfig.firstReminderDays);
-    res.json(stats);
   } catch (error) {
     next(error);
   }
