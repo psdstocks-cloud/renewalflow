@@ -5,7 +5,7 @@ FROM node:20-alpine AS base
 FROM base AS deps
 WORKDIR /app
 
-# Copy package files
+# Copy package files from server directory
 COPY server/package*.json ./
 COPY server/prisma ./prisma/
 
