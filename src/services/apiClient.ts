@@ -4,8 +4,11 @@ import { getAuthToken } from '../context/AuthContext';
 const getApiBaseUrl = () => {
   const url = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
   
+  // Trim whitespace (handles spaces in Cloudflare Pages env vars)
+  const trimmedUrl = url.trim();
+  
   // Remove trailing slash if present
-  const cleanUrl = url.replace(/\/$/, '');
+  const cleanUrl = trimmedUrl.replace(/\/$/, '');
   
   // Validate it's an absolute URL
   if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
@@ -14,6 +17,8 @@ const getApiBaseUrl = () => {
       `It must be a full URL starting with http:// or https://. ` +
       `Current value will cause requests to fail.`
     );
+    // Return a fallback to prevent complete failure
+    return 'http://localhost:4000';
   }
   
   return cleanUrl;
