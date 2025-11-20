@@ -1,3 +1,4 @@
+# Frontend files (not needed for backend Docker build)
 node_modules
 dist
 .git
@@ -20,6 +21,7 @@ index.tsx
 index.css
 App.tsx
 metadata.json
-# Don't ignore server directory - we need it for the Dockerfile
-!server/
-
+public
+# Explicitly include server directory
+!server
+!server/**
