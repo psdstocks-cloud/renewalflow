@@ -9,6 +9,7 @@ datasource db {
 
 model Subscriber {
   id              String     @id @default(cuid())
+  workspaceId     String
   name            String
   email           String     @unique
   phone           String?
@@ -24,10 +25,13 @@ model Subscriber {
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   emailLogs       EmailLog[]
+
+  workspace       Workspace  @relation(fields: [workspaceId], references: [id])
 }
 
 model EmailLog {
   id           String     @id @default(cuid())
+  workspaceId  String
   subscriberId String
   subscriber   Subscriber @relation(fields: [subscriberId], references: [id])
   type         String
@@ -37,10 +41,40 @@ model EmailLog {
   success      Boolean
   error        String?
   sentAt       DateTime   @default(now())
+
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id])
 }
 
 model AppSettings {
-  id    String @id @default(cuid())
-  key   String @unique
-  value Json
+  id          String     @id @default(cuid())
+  workspaceId String
+  key         String
+  value       Json
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, key])
+}
+
+model Workspace {
+  id          String          @id @default(cuid())
+  name        String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  users       WorkspaceUser[]
+  subscribers Subscriber[]
+  emailLogs   EmailLog[]
+  appSettings AppSettings[]
+}
+
+model WorkspaceUser {
+  id          String     @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        String
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, userId])
 }
