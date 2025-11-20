@@ -14,6 +14,7 @@ import {
   SubscriptionStatus,
   WooSettings,
   WooSyncResult,
+  WebsiteConnection,
 } from '@/src/types';
 import { apiFetch } from '@/src/services/apiClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -101,6 +102,11 @@ const Dashboard: React.FC = () => {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [websiteConnections, setWebsiteConnections] = useState<WebsiteConnection[]>([]);
+  const [isLoadingConnections, setIsLoadingConnections] = useState(false);
+  const [newWebsiteUrl, setNewWebsiteUrl] = useState('');
+  const [isCreatingConnection, setIsCreatingConnection] = useState(false);
+  const [copiedApiKey, setCopiedApiKey] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
   const handleLogout = async () => {
@@ -113,9 +119,95 @@ const Dashboard: React.FC = () => {
     loadReminderTasks();
   }, []);
 
+  const loadWebsiteConnections = async () => {
+    setIsLoadingConnections(true);
+    try {
+      const connections = await apiFetch<WebsiteConnection[]>('/api/website-connections');
+      setWebsiteConnections(connections);
+    } catch (err) {
+      console.error('Failed to load website connections:', err);
+      setError('Failed to load website connections.');
+    } finally {
+      setIsLoadingConnections(false);
+    }
+  };
+
+  const handleCreateWebsiteConnection = async () => {
+    if (!newWebsiteUrl.trim()) {
+      setError('Please enter a website URL');
+      return;
+    }
+
+    setIsCreatingConnection(true);
+    setError(null);
+    try {
+      const connection = await apiFetch<WebsiteConnection>('/api/website-connections', {
+        method: 'POST',
+        body: JSON.stringify({ websiteUrl: newWebsiteUrl.trim() }),
+      });
+      setWebsiteConnections([connection, ...websiteConnections]);
+      setNewWebsiteUrl('');
+      setSuccessMessage('Website connection created! Copy the API key to your WordPress plugin.');
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to create website connection.');
+    } finally {
+      setIsCreatingConnection(false);
+    }
+  };
+
+  const handleRegenerateApiKey = async (connectionId: string) => {
+    try {
+      const updated = await apiFetch<WebsiteConnection>(`/api/website-connections/${connectionId}/regenerate-key`, {
+        method: 'POST',
+      });
+      setWebsiteConnections(websiteConnections.map(c => c.id === connectionId ? updated : c));
+      setSuccessMessage('API key regenerated! Update your WordPress plugin with the new key.');
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to regenerate API key.');
+    }
+  };
+
+  const handleDeleteConnection = async (connectionId: string) => {
+    if (!confirm('Are you sure you want to delete this website connection? This will stop syncing from this website.')) {
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/website-connections/${connectionId}`, {
+        method: 'DELETE',
+      });
+      setWebsiteConnections(websiteConnections.filter(c => c.id !== connectionId));
+      setSuccessMessage('Website connection deleted.');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to delete website connection.');
+    }
+  };
+
+  const handleCopyApiKey = async (apiKey: string) => {
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      setCopiedApiKey(apiKey);
+      setSuccessMessage('API key copied to clipboard!');
+      setTimeout(() => {
+        setCopiedApiKey(null);
+        setSuccessMessage(null);
+      }, 3000);
+    } catch (err) {
+      setError('Failed to copy API key. Please copy it manually.');
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'action') {
       loadReminderTasks();
+    } else if (activeTab === 'integrations') {
+      loadWebsiteConnections();
     }
   }, [activeTab]);
 
@@ -683,6 +775,16 @@ const Dashboard: React.FC = () => {
             emailTemplate={emailTemplate}
             onSaveSettings={handleSaveSettings}
             isSavingSettings={isSavingSettings}
+            websiteConnections={websiteConnections}
+            isLoadingConnections={isLoadingConnections}
+            newWebsiteUrl={newWebsiteUrl}
+            setNewWebsiteUrl={setNewWebsiteUrl}
+            onCreateConnection={handleCreateWebsiteConnection}
+            isCreatingConnection={isCreatingConnection}
+            onRegenerateKey={handleRegenerateApiKey}
+            onDeleteConnection={handleDeleteConnection}
+            onCopyApiKey={handleCopyApiKey}
+            copiedApiKey={copiedApiKey}
           />
         )}
 
@@ -1096,6 +1198,16 @@ const IntegrationsTab = ({
   emailTemplate,
   onSaveSettings,
   isSavingSettings,
+  websiteConnections,
+  isLoadingConnections,
+  newWebsiteUrl,
+  setNewWebsiteUrl,
+  onCreateConnection,
+  isCreatingConnection,
+  onRegenerateKey,
+  onDeleteConnection,
+  onCopyApiKey,
+  copiedApiKey,
 }: {
   wooSettings: WooSettings;
   syncLog: string;
@@ -1105,8 +1217,189 @@ const IntegrationsTab = ({
   emailTemplate: EmailTemplateConfig;
   onSaveSettings: () => void;
   isSavingSettings: boolean;
+  websiteConnections: WebsiteConnection[];
+  isLoadingConnections: boolean;
+  newWebsiteUrl: string;
+  setNewWebsiteUrl: (url: string) => void;
+  onCreateConnection: () => void;
+  isCreatingConnection: boolean;
+  onRegenerateKey: (id: string) => void;
+  onDeleteConnection: (id: string) => void;
+  onCopyApiKey: (key: string) => void;
+  copiedApiKey: string | null;
 }) => (
-  <div className="max-w-6xl mx-auto animate-fade-in-up grid grid-cols-1 md:grid-cols-2 gap-8">
+  <div className="max-w-6xl mx-auto animate-fade-in-up space-y-8">
+    {/* Website Connection Section */}
+    <div>
+      <h2 className="text-2xl font-extrabold text-gray-900 mb-4">WordPress Website Integration</h2>
+      <div className="bg-white p-8 rounded-2xl shadow-xl shadow-indigo-100 border border-gray-100 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-6 opacity-5">
+          <i className="fab fa-wordpress text-9xl"></i>
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center text-2xl">
+            <i className="fab fa-wordpress"></i>
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-gray-900">Connect Your WordPress Site</h3>
+            <p className="text-sm text-gray-500">Sync users, points, and charges from your WooCommerce store</p>
+          </div>
+        </div>
+
+        {websiteConnections.length === 0 ? (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800 flex gap-3">
+              <i className="fas fa-info-circle mt-1"></i>
+              <div>
+                <p className="font-semibold mb-1">How it works:</p>
+                <ol className="list-decimal list-inside space-y-1 ml-2">
+                  <li>Add your WordPress website URL below</li>
+                  <li>Copy the generated API key</li>
+                  <li>Install the "Artly Reminder Bridge" plugin on your WordPress site</li>
+                  <li>Paste the API key in the plugin settings</li>
+                  <li>Click "Sync now" in WordPress to start syncing data</li>
+                </ol>
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="website-url" className="block text-sm font-bold text-gray-900 mb-2">
+                  Website URL
+                </label>
+                <input
+                  id="website-url"
+                  type="url"
+                  placeholder="https://yourwebsite.com"
+                  className="w-full p-3 border border-gray-200 rounded-lg focus:ring-primary focus:border-primary text-gray-900 placeholder-gray-400"
+                  value={newWebsiteUrl}
+                  onChange={(e) => setNewWebsiteUrl(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && onCreateConnection()}
+                />
+              </div>
+              <button
+                onClick={onCreateConnection}
+                disabled={isCreatingConnection || !newWebsiteUrl.trim()}
+                className="w-full bg-indigo-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-indigo-700 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isCreatingConnection ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin"></i>
+                    Creating Connection...
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-plus"></i>
+                    Connect Website
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {websiteConnections.map((connection) => (
+              <div key={connection.id} className="bg-gray-50 p-6 rounded-xl border border-gray-200">
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h4 className="text-lg font-bold text-gray-900">{connection.websiteUrl}</h4>
+                      {connection.isActive ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                          <i className="fas fa-check-circle"></i>
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-full">
+                          <i className="fas fa-pause-circle"></i>
+                          Inactive
+                        </span>
+                      )}
+                    </div>
+                    {connection.lastSyncAt && (
+                      <p className="text-sm text-gray-500">
+                        Last sync: {new Date(connection.lastSyncAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => onDeleteConnection(connection.id)}
+                    className="text-red-500 hover:text-red-700 p-2"
+                    title="Delete connection"
+                  >
+                    <i className="fas fa-trash"></i>
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+                      API Key (Copy this to your WordPress plugin)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={connection.apiKey}
+                        className="flex-1 p-3 bg-white border border-gray-300 rounded-lg text-sm font-mono text-gray-900"
+                      />
+                      <button
+                        onClick={() => onCopyApiKey(connection.apiKey)}
+                        className="px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold text-sm flex items-center gap-2"
+                        title="Copy API key"
+                      >
+                        {copiedApiKey === connection.apiKey ? (
+                          <>
+                            <i className="fas fa-check"></i>
+                            Copied!
+                          </>
+                        ) : (
+                          <>
+                            <i className="fas fa-copy"></i>
+                            Copy
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onRegenerateKey(connection.id)}
+                      className="flex-1 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 font-semibold text-sm flex items-center justify-center gap-2"
+                    >
+                      <i className="fas fa-key"></i>
+                      Regenerate Key
+                    </button>
+                    <div className="bg-blue-50 p-3 rounded-lg text-xs text-blue-800 flex-1">
+                      <p className="font-semibold mb-1">Plugin URL:</p>
+                      <p className="font-mono break-all text-[10px]">
+                        {(() => {
+                          try {
+                            return (import.meta as any).env?.VITE_API_BASE_URL || 'https://renewalflow-production.up.railway.app';
+                          } catch {
+                            return 'https://renewalflow-production.up.railway.app';
+                          }
+                        })()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {websiteConnections.length > 0 && (
+              <button
+                onClick={() => setNewWebsiteUrl('')}
+                className="w-full border-2 border-dashed border-gray-300 text-gray-500 px-4 py-3 rounded-lg hover:border-indigo-500 hover:text-indigo-500 font-semibold text-sm"
+              >
+                <i className="fas fa-plus mr-2"></i>
+                Add Another Website
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* Existing WooCommerce and Email sections */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
     <div className="col-span-1">
       <h2 className="text-2xl font-extrabold text-gray-900 mb-4">Data Sources</h2>
       <div className="bg-white p-8 rounded-2xl shadow-xl shadow-purple-100 border border-gray-100 relative overflow-hidden">
@@ -1228,6 +1521,7 @@ const IntegrationsTab = ({
           </div>
         </div>
       </div>
+    </div>
     </div>
   </div>
 );

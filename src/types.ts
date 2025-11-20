@@ -100,3 +100,13 @@ export interface ImportResult {
   created: number;
   updated: number;
 }
+
+export interface WebsiteConnection {
+  id: string;
+  websiteUrl: string;
+  apiKey: string;
+  isActive: boolean;
+  lastSyncAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
