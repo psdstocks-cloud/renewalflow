@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env';
 import * as jwt from 'jsonwebtoken';
+import { supabase } from '../config/supabase';
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   // Method 1: Check for admin API key (for service-to-service calls)
   const apiKey = req.header('x-admin-api-key');
   if (apiKey && apiKey === env.ADMIN_API_KEY) {
@@ -14,20 +15,35 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     try {
       const token = authHeader.substring(7);
-      // Verify JWT using Supabase JWT secret
-      const decoded = jwt.verify(token, env.SUPABASE_JWT_SECRET) as any;
+      
+      // Use Supabase client to verify the token
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      
+      if (error || !user) {
+        console.error('[Auth] Supabase token verification failed:', error?.message);
+        return res.status(401).json({ 
+          message: 'Unauthorized', 
+          error: 'Invalid token',
+          details: process.env.NODE_ENV === 'development' ? error?.message : undefined
+        });
+      }
       
       // Attach user info to request
       (req as any).user = {
-        id: decoded.sub || decoded.user_id,
-        email: decoded.email,
-        role: decoded.role
+        id: user.id,
+        email: user.email,
+        role: user.role || 'authenticated'
       };
       
       return next();
-    } catch (error) {
-      // JWT verification failed
-      return res.status(401).json({ message: 'Unauthorized', error: 'Invalid token' });
+    } catch (error: any) {
+      // Token verification failed
+      console.error('[Auth] Token verification error:', error.message);
+      return res.status(401).json({ 
+        message: 'Unauthorized', 
+        error: 'Invalid token',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   }
 

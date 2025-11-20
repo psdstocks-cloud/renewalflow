@@ -1,17 +1,19 @@
+import { getAuthToken } from '../context/AuthContext';
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<T> {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL;
-  const { supabase } = await import('../lib/supabaseClient');
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = getAuthToken?.() ?? null;
 
-  if (!baseUrl) {
-    throw new Error('Missing VITE_API_BASE_URL environment variable');
+  if (!token && process.env.NODE_ENV === 'development') {
+    console.warn('[apiFetch] No auth token available for request to:', path);
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -22,11 +24,11 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`API error ${response.status}: ${text || response.statusText}`);
-  }
+    console.error('[apiFetch] Error response:', response.status, text);
 
-  if (response.status === 204) {
-    return undefined as T;
+    throw new Error(
+      `API request failed: ${response.status} ${response.statusText}`,
+    );
   }
 
   return (await response.json()) as T;

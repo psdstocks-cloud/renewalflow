@@ -24,6 +24,8 @@ export function SignInPage() {
     setIsLoading(true);
     try {
       await signIn({ email, password });
+      // Small delay to ensure token is set in AuthContext
+      await new Promise(resolve => setTimeout(resolve, 50));
       await apiFetch('/api/workspaces/bootstrap', { method: 'POST' });
       navigate('/dashboard');
     } catch (err) {
