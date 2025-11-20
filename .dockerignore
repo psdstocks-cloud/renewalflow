@@ -9,7 +9,6 @@ dist
 .vscode
 .idea
 wp-content
-src
 components
 docs
 *.md
@@ -22,6 +21,11 @@ index.css
 App.tsx
 metadata.json
 public
-# Explicitly include server directory
+
+# Exclude root src and root node_modules, but keep server/
+/src
+/node_modules
+
+# Explicitly include server directory and all its contents
 !server
 !server/**
