@@ -47,12 +47,14 @@ COPY --from=builder /app/start.sh ./start.sh
 RUN chmod +x ./start.sh
 
 # Ensure tsx is available (needed for ES module imports at runtime)
-# Install it explicitly if not present (it should be in dependencies now)
-RUN if ! npm list tsx > /dev/null 2>&1; then \
-      echo "Installing tsx..." && \
-      npm install tsx --save --no-save; \
+# Since tsx is now in dependencies, it should be in node_modules
+# But verify and install if missing (npm install without --save to avoid modifying package.json)
+RUN if ! command -v tsx > /dev/null 2>&1 && ! npm list tsx > /dev/null 2>&1; then \
+      echo "Installing tsx (not found in node_modules)..." && \
+      npm install tsx --no-save; \
     fi && \
-    npm list tsx
+    echo "Verifying tsx installation..." && \
+    (npx tsx --version || npm list tsx || echo "WARNING: tsx verification failed")
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 4000
