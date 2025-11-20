@@ -19,6 +19,17 @@ export default defineConfig(({ mode }) => {
           '@': path.resolve(__dirname, '.'),
           'react-router-dom': path.resolve(__dirname, './src/router'),
         }
-      }
+      },
+      build: {
+        outDir: 'dist',
+        assetsDir: 'assets',
+        sourcemap: false,
+        rollupOptions: {
+          output: {
+            manualChunks: undefined,
+          },
+        },
+      },
+      publicDir: 'public',
     };
 });
