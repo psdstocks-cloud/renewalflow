@@ -40,14 +40,14 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
-COPY server/start.sh ./start.sh
 
-# Make start script executable
-RUN chmod +x ./start.sh
+# Copy and setup start script
+COPY server/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 4000
 
 # Start the application
-CMD ["./start.sh"]
+CMD ["/app/start.sh"]
 
