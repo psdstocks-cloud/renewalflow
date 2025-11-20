@@ -1,9 +1,10 @@
 # Railway/Nixpacks configuration for RenewalFlow backend
 # This tells Railway to build and run the server from the server/ directory
 
-# Use Node.js 20 (required by @google/genai and @supabase packages)
+# Let Nixpacks auto-detect Node.js version from .nvmrc (set to 20)
+# The .nvmrc file in server/ directory will be used
 [phases.setup]
-nixPkgs = ["nodejs-20_x"]
+# nixPkgs will be auto-detected from server/.nvmrc
 
 [phases.install]
 cmds = [
