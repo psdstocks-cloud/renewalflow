@@ -1,0 +1,14 @@
+# Ignore frontend files to prevent Railway from auto-detecting as frontend
+package.json
+package-lock.json
+pnpm-lock.yaml
+vite.config.ts
+tsconfig.json
+index.html
+index.tsx
+App.tsx
+src/
+components/
+public/
+node_modules/
+

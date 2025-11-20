@@ -1,5 +1,6 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
+  "$comment": "This service uses Dockerfile for backend deployment",
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile"
