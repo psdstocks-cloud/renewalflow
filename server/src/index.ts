@@ -16,20 +16,43 @@ import { startCronJobs } from './services/cronScheduler';
 const app = express();
 
 // CORS configuration - must be before routes
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://renewalflow.pages.dev',
+  env.FRONTEND_ORIGIN ?? '',
+].filter(Boolean);
+
+// Log CORS configuration on startup
+console.log('[CORS] Allowed origins:', allowedOrigins);
+console.log('[CORS] FRONTEND_ORIGIN env:', env.FRONTEND_ORIGIN || 'NOT SET');
+
 const corsOptions = {
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    env.FRONTEND_ORIGIN ?? '',
-  ].filter(Boolean),
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Log blocked origins for debugging
+    console.log('[CORS] Blocked origin:', origin);
+    callback(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type',
     'Authorization',
     'x-cron-key',
     'x-admin-api-key',
+    'x-artly-secret',
   ],
   credentials: false,
+  optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
 app.use(cors(corsOptions));
