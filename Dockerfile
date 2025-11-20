@@ -42,9 +42,8 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
 COPY server/start.sh ./start.sh
 
-# Make start script executable and ensure it uses sh
-RUN chmod +x ./start.sh && \
-    sed -i 's|#!/bin/bash|#!/bin/sh|' ./start.sh || true
+# Make start script executable
+RUN chmod +x ./start.sh
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 4000

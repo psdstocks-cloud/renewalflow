@@ -3,9 +3,6 @@ set -e
 
 echo "🚀 Starting RenewalFlow backend..."
 
-# Change to server directory
-cd "$(dirname "$0")"
-
 # Function to resolve failed migration
 resolve_failed_migration() {
   echo "📋 Attempting to resolve failed migration..."
