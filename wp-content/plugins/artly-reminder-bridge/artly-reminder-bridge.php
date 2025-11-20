@@ -86,13 +86,16 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
 
   if ( empty( $api_url ) || empty( $api_secret ) ) {
+    artly_reminder_bridge_log( 'API URL or Secret not configured. Please configure in WordPress admin → WooCommerce → Artly Reminder Sync.' );
     return null;
   }
 
-  // Ensure URL ends with / and endpoint doesn't start with /
+  // Ensure URL doesn't have trailing slash and endpoint doesn't start with /
   $api_url = rtrim( $api_url, '/' );
   $endpoint = ltrim( $endpoint, '/' );
   $full_url = $api_url . '/' . $endpoint;
+  
+  artly_reminder_bridge_log( 'Sending request to: ' . $full_url );
 
   $response = wp_remote_post(
     $full_url,
