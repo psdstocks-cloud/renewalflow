@@ -102,17 +102,21 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   artly_reminder_bridge_log( 'Sending request to: ' . $full_url );
   artly_reminder_bridge_log( 'Payload size: ' . count( $payload ) . ' items' );
 
+  // Ensure header name is correct (Express normalizes to lowercase)
   $response = wp_remote_post(
     $full_url,
     array(
       'headers' => array(
         'Content-Type'   => 'application/json',
-        'x-artly-secret' => $api_secret,
+        'x-artly-secret' => trim( $api_secret ), // Trim any whitespace
       ),
       'body'    => wp_json_encode( $payload ),
       'timeout' => 30,
     )
   );
+  
+  // Log the header being sent for debugging
+  artly_reminder_bridge_log( 'Request headers: x-artly-secret=' . substr( $api_secret, 0, 20 ) . '...' );
 
   if ( is_wp_error( $response ) ) {
     $error_msg = 'Error syncing to ' . $endpoint . ': ' . $response->get_error_message();
