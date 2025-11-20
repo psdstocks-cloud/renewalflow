@@ -15,6 +15,8 @@ const ARB_LAST_SYNC_TIME_OPTION = '_artly_last_points_sync_time';
 const ARB_ENGINE_URL_OPTION     = '_artly_reminder_engine_url';
 const ARB_ENGINE_SECRET_OPTION  = '_artly_reminder_engine_secret';
 const ARB_CRON_HOOK             = 'artly_points_sync_cron';
+const ARB_LAST_SYNC_RESULT      = '_artly_last_sync_result';
+const ARB_LAST_SYNC_ERROR       = '_artly_last_sync_error';
 
 register_activation_hook( __FILE__, 'artly_reminder_bridge_activate' );
 function artly_reminder_bridge_activate(): void {
@@ -86,7 +88,9 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
 
   if ( empty( $api_url ) || empty( $api_secret ) ) {
-    artly_reminder_bridge_log( 'API URL or Secret not configured. Please configure in WordPress admin → WooCommerce → Artly Reminder Sync.' );
+    $error_msg = 'API URL or Secret not configured. Please configure in WordPress admin → WooCommerce → Artly Reminder Sync.';
+    artly_reminder_bridge_log( $error_msg );
+    update_option( ARB_LAST_SYNC_ERROR, $error_msg );
     return null;
   }
 
@@ -96,6 +100,7 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   $full_url = $api_url . '/' . $endpoint;
   
   artly_reminder_bridge_log( 'Sending request to: ' . $full_url );
+  artly_reminder_bridge_log( 'Payload size: ' . count( $payload ) . ' items' );
 
   $response = wp_remote_post(
     $full_url,
@@ -110,7 +115,9 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   );
 
   if ( is_wp_error( $response ) ) {
-    artly_reminder_bridge_log( 'Error syncing to ' . $endpoint . ': ' . $response->get_error_message() );
+    $error_msg = 'Error syncing to ' . $endpoint . ': ' . $response->get_error_message();
+    artly_reminder_bridge_log( $error_msg );
+    update_option( ARB_LAST_SYNC_ERROR, $error_msg );
     return null;
   }
 
@@ -118,10 +125,18 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
   $body = wp_remote_retrieve_body( $response );
 
   if ( $code >= 300 ) {
-    artly_reminder_bridge_log( 'Sync to ' . $endpoint . ' failed with status ' . $code . ' body: ' . $body );
+    $error_msg = 'Sync to ' . $endpoint . ' failed with status ' . $code;
+    if ( $code === 401 ) {
+      $error_msg .= ' - Unauthorized. Please check your API key is correct and matches the one in your RenewalFlow dashboard.';
+    }
+    $error_msg .= ' Response: ' . $body;
+    artly_reminder_bridge_log( $error_msg );
+    update_option( ARB_LAST_SYNC_ERROR, $error_msg );
     return null;
   }
 
+  // Clear error on success
+  update_option( ARB_LAST_SYNC_ERROR, '' );
   return json_decode( $body, true );
 }
 
@@ -178,7 +193,7 @@ function artly_sync_points_from_woo(): void {
   }
 }
 
-function artly_sync_users_from_woo(): void {
+function artly_sync_users_from_woo(): array {
   $users = get_users( array( 'fields' => array( 'ID', 'user_email' ) ) );
   $payload = array();
 
@@ -195,21 +210,32 @@ function artly_sync_users_from_woo(): void {
   }
 
   if ( empty( $payload ) ) {
-    artly_reminder_bridge_log( 'No users to sync.' );
-    return;
+    $msg = 'No users to sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
 
   $result = artly_reminder_bridge_post_to_api( 'artly/sync/users', $payload );
   if ( null !== $result ) {
     $upserted = (int) ( $result['upserted'] ?? count( $payload ) );
-    artly_reminder_bridge_log( sprintf( 'Synced %d users', $upserted ) );
+    $msg = sprintf( 'Successfully synced %d users', $upserted );
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) );
   }
+  
+  $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $error, 'count' => 0 ) );
+  return array( 'success' => false, 'message' => $error, 'count' => 0 );
 }
 
-function artly_sync_charges_from_woo(): void {
+function artly_sync_charges_from_woo(): array {
   if ( ! class_exists( 'WooCommerce' ) ) {
-    artly_reminder_bridge_log( 'WooCommerce not found; skipping charge sync.' );
-    return;
+    $msg = 'WooCommerce not found; skipping charge sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
 
   $orders = wc_get_orders(
@@ -225,6 +251,10 @@ function artly_sync_charges_from_woo(): void {
 
   foreach ( $orders as $order ) {
     $user_id = $order->get_user_id();
+    if ( ! $user_id ) {
+      continue;
+    }
+    $user = get_userdata( $user_id );
     $payload[] = array(
       'external_charge_id' => (string) $order->get_id(),
       'wp_user_id'         => $user_id > 0 ? $user_id : null,
@@ -239,15 +269,24 @@ function artly_sync_charges_from_woo(): void {
   }
 
   if ( empty( $payload ) ) {
-    artly_reminder_bridge_log( 'No charges to sync.' );
-    return;
+    $msg = 'No charges to sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
 
   $result = artly_reminder_bridge_post_to_api( 'artly/sync/charges', $payload );
   if ( null !== $result ) {
     $upserted = (int) ( $result['upserted'] ?? count( $payload ) );
-    artly_reminder_bridge_log( sprintf( 'Synced %d charges', $upserted ) );
+    $msg = sprintf( 'Successfully synced %d charges', $upserted );
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) );
   }
+  
+  $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $error, 'count' => 0 ) );
+  return array( 'success' => false, 'message' => $error, 'count' => 0 );
 }
 
 add_action( 'admin_menu', 'artly_reminder_bridge_admin_menu' );
@@ -279,19 +318,68 @@ function artly_reminder_bridge_handle_post(): ?string {
     update_option( ARB_ENGINE_SECRET_OPTION, sanitize_text_field( wp_unslash( $_POST['artly_reminder_engine_secret'] ) ) );
   }
 
-  if ( isset( $_POST['artly_sync_points'] ) ) {
-    artly_sync_points_from_woo();
-    return __( 'Points sync triggered.', 'artly-reminder-bridge' );
+  if ( isset( $_POST['artly_test_connection'] ) ) {
+    $api_url    = get_option( ARB_ENGINE_URL_OPTION );
+    $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
+    
+    if ( empty( $api_url ) || empty( $api_secret ) ) {
+      return '<span style="color: red;">❌ Error: API URL or Secret not configured.</span>';
+    }
+    
+    $api_url = rtrim( $api_url, '/' );
+    $test_url = $api_url . '/artly/sync/users';
+    
+    $response = wp_remote_post(
+      $test_url,
+      array(
+        'headers' => array(
+          'Content-Type'   => 'application/json',
+          'x-artly-secret' => $api_secret,
+        ),
+        'body'    => wp_json_encode( array() ),
+        'timeout' => 10,
+      )
+    );
+    
+    if ( is_wp_error( $response ) ) {
+      return '<span style="color: red;">❌ Connection failed: ' . esc_html( $response->get_error_message() ) . '</span>';
+    }
+    
+    $code = wp_remote_retrieve_response_code( $response );
+    if ( $code === 401 ) {
+      return '<span style="color: red;">❌ Unauthorized: Invalid API key. Please check your API key matches the one in your RenewalFlow dashboard.</span>';
+    } elseif ( $code >= 300 ) {
+      $body = wp_remote_retrieve_body( $response );
+      return '<span style="color: orange;">⚠️ Connection test returned status ' . $code . ': ' . esc_html( substr( $body, 0, 100 ) ) . '</span>';
+    }
+    
+    return '<span style="color: green;">✅ Connection successful! API key is valid.</span>';
   }
 
   if ( isset( $_POST['artly_sync_users'] ) ) {
-    artly_sync_users_from_woo();
-    return __( 'Users sync triggered.', 'artly-reminder-bridge' );
+    $result = artly_sync_users_from_woo();
+    if ( $result['success'] ) {
+      return '<span style="color: green;">✅ ' . esc_html( $result['message'] ) . ' (' . $result['count'] . ' of ' . $result['total'] . ' users)</span>';
+    }
+    return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
+  }
+
+  if ( isset( $_POST['artly_sync_points'] ) ) {
+    artly_sync_points_from_woo();
+    $last_result = get_option( ARB_LAST_SYNC_RESULT, array() );
+    if ( ! empty( $last_result ) && isset( $last_result['success'] ) && $last_result['success'] ) {
+      return '<span style="color: green;">✅ ' . esc_html( $last_result['message'] ) . '</span>';
+    }
+    $error = get_option( ARB_LAST_SYNC_ERROR, 'Points sync completed. Check logs for details.' );
+    return '<span style="color: orange;">⚠️ ' . esc_html( $error ) . '</span>';
   }
 
   if ( isset( $_POST['artly_sync_charges'] ) ) {
-    artly_sync_charges_from_woo();
-    return __( 'Charges sync triggered.', 'artly-reminder-bridge' );
+    $result = artly_sync_charges_from_woo();
+    if ( $result['success'] ) {
+      return '<span style="color: green;">✅ ' . esc_html( $result['message'] ) . ' (' . $result['count'] . ' of ' . $result['total'] . ' charges)</span>';
+    }
+    return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
   }
 
   return __( 'Settings saved.', 'artly-reminder-bridge' );
@@ -316,12 +404,26 @@ function artly_reminder_bridge_render_admin_page(): void {
     <table class="widefat" style="max-width: 700px; margin-top: 10px;">
       <tbody>
         <tr>
+          <th><?php esc_html_e( 'WordPress Users', 'artly-reminder-bridge' ); ?></th>
+          <td><strong><?php echo esc_html( $user_count['total_users'] ); ?></strong> total users</td>
+        </tr>
+        <tr>
           <th><?php esc_html_e( 'Last Woo Points Log ID', 'artly-reminder-bridge' ); ?></th>
           <td><?php echo esc_html( (string) $last_id ); ?></td>
         </tr>
         <tr>
           <th><?php esc_html_e( 'Last Sync Time (UTC)', 'artly-reminder-bridge' ); ?></th>
           <td><?php echo esc_html( $last_sync ? $last_sync : __( 'Never', 'artly-reminder-bridge' ) ); ?></td>
+        </tr>
+        <tr>
+          <th><?php esc_html_e( 'Connection Status', 'artly-reminder-bridge' ); ?></th>
+          <td>
+            <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
+              <span style="color: green;">✅ Configured</span>
+            <?php else : ?>
+              <span style="color: red;">❌ Not configured</span>
+            <?php endif; ?>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -354,6 +456,9 @@ function artly_reminder_bridge_render_admin_page(): void {
       </table>
       <p class="submit">
         <button type="submit" name="submit" class="button button-primary"><?php esc_html_e( 'Save settings', 'artly-reminder-bridge' ); ?></button>
+        <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
+          <button type="submit" name="artly_test_connection" value="1" class="button"><?php esc_html_e( 'Test Connection', 'artly-reminder-bridge' ); ?></button>
+        <?php endif; ?>
       </p>
     </form>
     <div style="max-width: 700px; margin-top: 20px;">
@@ -362,19 +467,19 @@ function artly_reminder_bridge_render_admin_page(): void {
       <form method="post" style="margin-top: 10px;">
         <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
         <p>
-          <button type="submit" name="artly_sync_users" value="1" class="button"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
-          <span class="description"><?php esc_html_e( 'Sync all WordPress users to the Reminder Engine', 'artly-reminder-bridge' ); ?></span>
+          <button type="submit" name="artly_sync_users" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
+          <span class="description"><?php esc_html_e( 'Sync all WordPress users to the Reminder Engine', 'artly-reminder-bridge' ); ?> (<?php echo esc_html( $user_count['total_users'] ); ?> users)</span>
         </p>
         <p>
-          <button type="submit" name="artly_sync_points" value="1" class="button"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
+          <button type="submit" name="artly_sync_points" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
           <span class="description"><?php esc_html_e( 'Sync points events and logs from WooCommerce Points & Rewards', 'artly-reminder-bridge' ); ?></span>
         </p>
         <p>
-          <button type="submit" name="artly_sync_charges" value="1" class="button"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
+          <button type="submit" name="artly_sync_charges" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
           <span class="description"><?php esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine', 'artly-reminder-bridge' ); ?></span>
         </p>
       </form>
-    </form>
+    </div>
   </div>
   <?php
 }
