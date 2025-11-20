@@ -9,7 +9,7 @@ WORKDIR /app
 COPY server/package*.json ./
 COPY server/prisma ./prisma/
 
-# Install dependencies
+# Install dependencies (including devDependencies for tsx)
 RUN npm ci
 
 # Generate Prisma Client
@@ -40,6 +40,9 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
+
+# Ensure tsx is available (needed for ES module imports)
+RUN npm list tsx || npm install tsx
 
 # Copy and setup start script
 COPY server/start.sh /app/start.sh
