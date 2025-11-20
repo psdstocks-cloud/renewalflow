@@ -7,6 +7,148 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Tenant {
+  id        String   @id
+  name      String
+  timezone  String   @default("Africa/Cairo")
+  createdAt DateTime @default(now())
+
+  customers         Customer[]
+  pointsBatches     PointsBatch[]
+  pointsTransactions PointsTransaction[]
+  walletSnapshots   WalletSnapshot[]
+  reminderRules     ReminderRule[]
+  reminderJobs      ReminderJob[]
+  subscriptions     Subscription[]
+}
+
+model Customer {
+  id              BigInt   @id @default(autoincrement())
+  tenantId        String
+  externalUserId  BigInt
+  email           String
+  phone           String?
+  whatsapp        String?
+  locale          String   @default("en")
+  timezone        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pointsBatches   PointsBatch[]
+  pointsTransactions PointsTransaction[]
+  walletSnapshots WalletSnapshot[]
+  reminderJobs    ReminderJob[]
+  subscriptions   Subscription[]
+
+  @@unique([tenantId, externalUserId])
+}
+
+model PointsBatch {
+  id               BigInt   @id @default(autoincrement())
+  tenantId         String
+  customerId       BigInt
+  source           String
+  externalOrderId  String?
+  pointsTotal      Int
+  pointsRemaining  Int
+  purchasedAt      DateTime
+  expiresAt        DateTime
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer        Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  transactions    PointsTransaction[]
+
+  @@index([customerId])
+  @@index([expiresAt, status])
+}
+
+model PointsTransaction {
+  id               BigInt   @id @default(autoincrement())
+  tenantId         String
+  customerId       BigInt
+  batchId          BigInt?
+  delta            Int
+  type             String
+  description      String?
+  referenceType    String?
+  referenceId      String?
+  externalEventId  BigInt?
+  createdAt        DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  batch    PointsBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, createdAt])
+  @@unique([tenantId, externalEventId])
+}
+
+model WalletSnapshot {
+  tenantId      String
+  customerId    BigInt
+  pointsBalance Int
+  updatedAt     DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, customerId])
+}
+
+model ReminderRule {
+  id          BigInt   @id @default(autoincrement())
+  tenantId    String
+  name        String
+  eventType   String
+  offsetType  String
+  offsetValue Int
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reminderJobs ReminderJob[]
+}
+
+model ReminderJob {
+  id           BigInt   @id @default(autoincrement())
+  tenantId     String
+  ruleId       BigInt
+  customerId   BigInt
+  channel      String
+  scheduledFor DateTime
+  status       String   @default("pending")
+  payload      Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rule      ReminderRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  customer  Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id                    BigInt   @id @default(autoincrement())
+  tenantId              String
+  customerId            BigInt?
+  externalSubscriptionId String
+  status                String
+  planName              String?
+  nextPaymentDate       DateTime?
+  currentPeriodEnd      DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, externalSubscriptionId])
+}
+
 model Subscriber {
   id              String     @id @default(cuid())
   workspaceId     String

@@ -9,6 +9,8 @@ import { wooRouter } from './routes/woo';
 import { cronRouter } from './routes/cron';
 import { workspaceRouter } from './routes/workspaces';
 import { errorHandler } from './middleware/errorHandler';
+import { artlyRouter } from './routes/artly';
+import { startCronJobs } from './services/cronScheduler';
 
 const app = express();
 
@@ -43,9 +45,12 @@ app.use(settingsRouter);
 app.use(reminderRouter);
 app.use(wooRouter);
 app.use(cronRouter);
+app.use(artlyRouter);
 
 app.use(errorHandler);
 
 app.listen(env.PORT, () => {
   console.log(`RenewalFlow API listening on port ${env.PORT}`);
 });
+
+startCronJobs();

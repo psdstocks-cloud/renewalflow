@@ -21,7 +21,8 @@ const envSchema = z.object({
   SMTP_PASS: z.string().min(1, 'SMTP_PASS is required'),
   SMTP_FROM_EMAIL: z.string().email('SMTP_FROM_EMAIL must be valid'),
   SMTP_FROM_NAME: z.string().optional(),
-  FRONTEND_ORIGIN: z.string().optional()
+  FRONTEND_ORIGIN: z.string().optional(),
+  ARTLY_API_SECRET: z.string().optional()
 });
 
 export type Env = z.infer<typeof envSchema>;
