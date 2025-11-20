@@ -87,7 +87,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
       }
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const customer = await tx.customer.upsert({
         where: {
           tenantId_externalUserId: {
@@ -269,6 +269,110 @@ export const processSubscriptions = async (rawSubscriptions: unknown) => {
         customerId: customer?.id,
       },
     });
+
+    upserted += 1;
+  }
+
+  return { upserted };
+};
+
+const userSchema = z.object({
+  wp_user_id: z.number().int(),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  whatsapp: z.string().optional(),
+  locale: z.string().optional(),
+  timezone: z.string().optional(),
+});
+
+export const processUsers = async (rawUsers: unknown) => {
+  const users = z.array(userSchema).parse(rawUsers);
+  let upserted = 0;
+
+  for (const user of users) {
+    await prisma.customer.upsert({
+      where: {
+        tenantId_externalUserId: {
+          tenantId: TENANT_ID,
+          externalUserId: BigInt(user.wp_user_id),
+        },
+      },
+      update: {
+        email: user.email,
+        phone: user.phone ?? undefined,
+        whatsapp: user.whatsapp ?? undefined,
+        locale: user.locale ?? 'en',
+        timezone: user.timezone ?? undefined,
+      },
+      create: {
+        tenantId: TENANT_ID,
+        externalUserId: BigInt(user.wp_user_id),
+        email: user.email,
+        phone: user.phone ?? undefined,
+        whatsapp: user.whatsapp ?? undefined,
+        locale: user.locale ?? 'en',
+        timezone: user.timezone ?? undefined,
+      },
+    });
+
+    upserted += 1;
+  }
+
+  return { upserted };
+};
+
+const chargeSchema = z.object({
+  external_charge_id: z.union([z.string(), z.number()]),
+  wp_user_id: z.number().int().optional(),
+  email: z.string().email().optional(),
+  order_id: z.string().optional(),
+  amount: z.number(),
+  currency: z.string().default('EGP'),
+  status: z.string(),
+  payment_method: z.string().optional(),
+  created_at: z.string().datetime(),
+});
+
+export const processCharges = async (rawCharges: unknown) => {
+  const charges = z.array(chargeSchema).parse(rawCharges);
+  let upserted = 0;
+
+  for (const charge of charges) {
+    // Create or update customer if we have user info
+    const customer = charge.wp_user_id && charge.email
+      ? await prisma.customer.upsert({
+          where: {
+            tenantId_externalUserId: {
+              tenantId: TENANT_ID,
+              externalUserId: BigInt(charge.wp_user_id),
+            },
+          },
+          update: { email: charge.email },
+          create: {
+            tenantId: TENANT_ID,
+            externalUserId: BigInt(charge.wp_user_id),
+            email: charge.email,
+          },
+        })
+      : null;
+
+    // Store charge information in points transaction with reference
+    if (customer && charge.amount > 0) {
+      const createdAt = new Date(charge.created_at);
+      
+      await prisma.pointsTransaction.create({
+        data: {
+          tenantId: TENANT_ID,
+          customerId: customer.id,
+          delta: 0, // Charge itself doesn't add points, but we track it
+          type: 'charge',
+          description: `Charge: ${charge.amount} ${charge.currency}`,
+          referenceType: 'woo_order',
+          referenceId: charge.order_id ?? String(charge.external_charge_id),
+          createdAt,
+        },
+      });
+    }
 
     upserted += 1;
   }
