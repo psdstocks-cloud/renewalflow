@@ -49,8 +49,11 @@ app.use(artlyRouter);
 
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
-  console.log(`RenewalFlow API listening on port ${env.PORT}`);
+const port = env.PORT || 4000;
+const host = process.env.HOST || '0.0.0.0';
+
+app.listen(port, host, () => {
+  console.log(`RenewalFlow API listening on ${host}:${port}`);
 });
 
 startCronJobs();
