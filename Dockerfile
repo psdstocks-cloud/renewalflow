@@ -46,8 +46,13 @@ COPY --from=builder /app/start.sh ./start.sh
 # Make start script executable
 RUN chmod +x ./start.sh
 
-# Verify tsx is available (it should be from node_modules copy)
-RUN npm list tsx || (echo "ERROR: tsx not found in node_modules" && exit 1)
+# Ensure tsx is available (needed for ES module imports at runtime)
+# Install it explicitly if not present (it should be in dependencies now)
+RUN if ! npm list tsx > /dev/null 2>&1; then \
+      echo "Installing tsx..." && \
+      npm install tsx --save --no-save; \
+    fi && \
+    npm list tsx
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 4000
