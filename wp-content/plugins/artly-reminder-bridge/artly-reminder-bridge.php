@@ -144,16 +144,19 @@ function artly_reminder_bridge_post_events( array $events ): ?array {
   return artly_reminder_bridge_post_to_api( 'artly/sync/points-events', $events );
 }
 
-function artly_sync_points_from_woo(): void {
+function artly_sync_points_from_woo(): array {
   global $wpdb;
 
   if ( ! artly_reminder_bridge_points_table_exists( $wpdb ) ) {
-    artly_reminder_bridge_log( 'Woo Points & Rewards table not found; skipping sync.' );
-    return;
+    $msg = 'Woo Points & Rewards table not found; skipping sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
 
   $last_id        = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
   $total_imported = 0;
+  $total_processed = 0;
 
   while ( true ) {
     $rows = artly_reminder_bridge_fetch_events_batch( $wpdb, $last_id );
@@ -179,18 +182,29 @@ function artly_sync_points_from_woo(): void {
 
     $result = artly_reminder_bridge_post_events( $payload );
     if ( null === $result ) {
-      return;
+      $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during points sync' );
+      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $error, 'count' => $total_imported ) );
+      return array( 'success' => false, 'message' => $error, 'count' => $total_imported );
     }
 
     $last_id = (int) end( $rows )->id;
     update_option( ARB_LAST_LOG_ID_OPTION, $last_id );
     update_option( ARB_LAST_SYNC_TIME_OPTION, current_time( 'mysql', true ) );
-    $total_imported += (int) ( $result['imported'] ?? count( $payload ) );
+    $batch_imported = (int) ( $result['imported'] ?? count( $payload ) );
+    $total_imported += $batch_imported;
+    $total_processed += count( $payload );
   }
 
   if ( $total_imported > 0 ) {
-    artly_reminder_bridge_log( sprintf( 'Synced %d points events up to ID %d', $total_imported, $last_id ) );
+    $msg = sprintf( 'Successfully synced %d points events (up to ID %d)', $total_imported, $last_id );
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => $total_imported, 'total' => $total_processed ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $total_imported, 'total' => $total_processed );
   }
+  
+  $msg = 'No new points events to sync.';
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => 0 ) );
+  return array( 'success' => true, 'message' => $msg, 'count' => 0 );
 }
 
 function artly_sync_users_from_woo(): array {
@@ -365,13 +379,15 @@ function artly_reminder_bridge_handle_post(): ?string {
   }
 
   if ( isset( $_POST['artly_sync_points'] ) ) {
-    artly_sync_points_from_woo();
-    $last_result = get_option( ARB_LAST_SYNC_RESULT, array() );
-    if ( ! empty( $last_result ) && isset( $last_result['success'] ) && $last_result['success'] ) {
-      return '<span style="color: green;">✅ ' . esc_html( $last_result['message'] ) . '</span>';
+    $result = artly_sync_points_from_woo();
+    if ( $result['success'] ) {
+      $msg = $result['message'];
+      if ( $result['count'] > 0 && isset( $result['total'] ) ) {
+        $msg .= ' (' . $result['count'] . ' of ' . $result['total'] . ' events)';
+      }
+      return '<span style="color: green;">✅ ' . esc_html( $msg ) . '</span>';
     }
-    $error = get_option( ARB_LAST_SYNC_ERROR, 'Points sync completed. Check logs for details.' );
-    return '<span style="color: orange;">⚠️ ' . esc_html( $error ) . '</span>';
+    return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
   }
 
   if ( isset( $_POST['artly_sync_charges'] ) ) {
