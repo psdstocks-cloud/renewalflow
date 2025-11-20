@@ -42,9 +42,20 @@ export function getSubscriber(id: string) {
   return prisma.subscriber.findUnique({ where: { id } });
 }
 
-export async function createSubscriber(data: SubscriberInput): Promise<Subscriber> {
+// Get default workspace ID (for now, use the first workspace)
+// TODO: Get workspaceId from authenticated user context
+async function getDefaultWorkspaceId(): Promise<string> {
+  const workspace = await prisma.workspace.findFirst();
+  if (!workspace) {
+    throw new Error('No workspace found. Please bootstrap a workspace first.');
+  }
+  return workspace.id;
+}
+
+export async function createSubscriber(data: SubscriberInput, workspaceId?: string): Promise<Subscriber> {
   const parsed = subscriberSchema.parse(data);
-  return prisma.subscriber.create({ data: parsed });
+  const wsId = workspaceId || await getDefaultWorkspaceId();
+  return prisma.subscriber.create({ data: { ...parsed, workspaceId: wsId } });
 }
 
 export async function updateSubscriber(id: string, data: Partial<SubscriberInput>): Promise<Subscriber> {
@@ -56,9 +67,10 @@ export function cancelSubscriber(id: string) {
   return prisma.subscriber.update({ where: { id }, data: { status: 'CANCELLED' } });
 }
 
-export async function importSubscribers(subscribers: SubscriberInput[]) {
+export async function importSubscribers(subscribers: SubscriberInput[], workspaceId?: string) {
   let created = 0;
   let updated = 0;
+  const wsId = workspaceId || await getDefaultWorkspaceId();
   for (const sub of subscribers) {
     const parsed = subscriberSchema.parse(sub);
     const existing = await prisma.subscriber.findUnique({ where: { email: parsed.email } });
@@ -66,7 +78,7 @@ export async function importSubscribers(subscribers: SubscriberInput[]) {
       await prisma.subscriber.update({ where: { id: existing.id }, data: parsed });
       updated += 1;
     } else {
-      await prisma.subscriber.create({ data: parsed });
+      await prisma.subscriber.create({ data: { ...parsed, workspaceId: wsId } });
       created += 1;
     }
   }

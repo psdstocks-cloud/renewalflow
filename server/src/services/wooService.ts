@@ -60,8 +60,14 @@ export async function syncWooOrders() {
       });
       updated += 1;
     } else {
+      // Get default workspace ID
+      const workspace = await prisma.workspace.findFirst();
+      if (!workspace) {
+        throw new Error('No workspace found. Please bootstrap a workspace first.');
+      }
       await prisma.subscriber.create({
         data: {
+          workspaceId: workspace.id,
           name: customerName || 'Woo Customer',
           email: order.billing.email,
           phone: undefined,

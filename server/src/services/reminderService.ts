@@ -52,6 +52,7 @@ export async function sendReminderTask(task: ReminderTask, customInstructions?: 
   const emailLog = await prisma.emailLog.create({
     data: {
       subscriberId: task.subscriber.id,
+      workspaceId: task.subscriber.workspaceId,
       type: task.type,
       subject,
       body,

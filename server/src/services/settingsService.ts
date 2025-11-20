@@ -29,16 +29,30 @@ const wooSchema = z.object({
   pointsPerCurrency: z.number().positive()
 });
 
-async function upsertSetting<T>(key: string, value: T) {
+// Get default workspace ID (for now, use the first workspace)
+// TODO: Get workspaceId from authenticated user context
+async function getDefaultWorkspaceId(): Promise<string> {
+  const workspace = await prisma.workspace.findFirst();
+  if (!workspace) {
+    throw new Error('No workspace found. Please bootstrap a workspace first.');
+  }
+  return workspace.id;
+}
+
+async function upsertSetting<T>(key: string, value: T, workspaceId?: string) {
+  const wsId = workspaceId || await getDefaultWorkspaceId();
   await prisma.appSettings.upsert({
-    where: { key },
-    create: { key, value: value as any },
+    where: { workspaceId_key: { workspaceId: wsId, key } },
+    create: { workspaceId: wsId, key, value: value as any },
     update: { value: value as any }
   });
 }
 
-async function getSetting<T>(key: string) {
-  const entry = await prisma.appSettings.findUnique({ where: { key } });
+async function getSetting<T>(key: string, workspaceId?: string) {
+  const wsId = workspaceId || await getDefaultWorkspaceId();
+  const entry = await prisma.appSettings.findUnique({ 
+    where: { workspaceId_key: { workspaceId: wsId, key } } 
+  });
   return (entry?.value as T | undefined) ?? null;
 }
 
