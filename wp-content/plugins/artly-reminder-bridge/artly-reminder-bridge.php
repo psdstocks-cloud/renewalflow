@@ -24,7 +24,7 @@ function artly_reminder_bridge_activate(): void {
 
   add_option( ARB_LAST_LOG_ID_OPTION, 0 );
   add_option( ARB_LAST_SYNC_TIME_OPTION, null );
-  add_option( ARB_ENGINE_URL_OPTION, 'https://reminder-engine.example.com/artly/sync/points-events' );
+  add_option( ARB_ENGINE_URL_OPTION, 'https://renewalflow-production.up.railway.app' );
   add_option( ARB_ENGINE_SECRET_OPTION, '' );
 }
 
@@ -324,17 +324,28 @@ function artly_reminder_bridge_render_admin_page(): void {
     </table>
     <form method="post" style="max-width: 700px; margin-top: 20px;">
       <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
+      <div class="notice notice-info" style="max-width: 700px; margin: 20px 0;">
+        <p><strong><?php esc_html_e( 'How to get your API key:', 'artly-reminder-bridge' ); ?></strong></p>
+        <ol>
+          <li><?php esc_html_e( 'Log in to your RenewalFlow dashboard at', 'artly-reminder-bridge' ); ?> <a href="https://renewalflow.pages.dev" target="_blank">https://renewalflow.pages.dev</a></li>
+          <li><?php esc_html_e( 'Go to the "Integrations" tab', 'artly-reminder-bridge' ); ?></li>
+          <li><?php esc_html_e( 'Add your website URL and click "Connect Website"', 'artly-reminder-bridge' ); ?></li>
+          <li><?php esc_html_e( 'Copy the generated API key and paste it below', 'artly-reminder-bridge' ); ?></li>
+        </ol>
+      </div>
       <table class="form-table">
         <tr>
-          <th scope="row"><label for="artly_reminder_engine_url"><?php esc_html_e( 'Reminder Engine URL', 'artly-reminder-bridge' ); ?></label></th>
+          <th scope="row"><label for="artly_reminder_engine_url"><?php esc_html_e( 'RenewalFlow API Base URL', 'artly-reminder-bridge' ); ?></label></th>
           <td>
-            <input name="artly_reminder_engine_url" type="url" id="artly_reminder_engine_url" class="regular-text" value="<?php echo esc_attr( $api_url ); ?>" required />
+            <input name="artly_reminder_engine_url" type="url" id="artly_reminder_engine_url" class="regular-text" value="<?php echo esc_attr( $api_url ); ?>" placeholder="https://renewalflow-production.up.railway.app" required />
+            <p class="description"><?php esc_html_e( 'The base URL of your RenewalFlow backend (without /artly/sync/). Example: https://renewalflow-production.up.railway.app', 'artly-reminder-bridge' ); ?></p>
           </td>
         </tr>
         <tr>
-          <th scope="row"><label for="artly_reminder_engine_secret"><?php esc_html_e( 'Reminder Engine Secret', 'artly-reminder-bridge' ); ?></label></th>
+          <th scope="row"><label for="artly_reminder_engine_secret"><?php esc_html_e( 'API Key', 'artly-reminder-bridge' ); ?></label></th>
           <td>
-            <input name="artly_reminder_engine_secret" type="text" id="artly_reminder_engine_secret" class="regular-text" value="<?php echo esc_attr( $api_secret ); ?>" required />
+            <input name="artly_reminder_engine_secret" type="text" id="artly_reminder_engine_secret" class="regular-text code" value="<?php echo esc_attr( $api_secret ); ?>" placeholder="artly_workspaceId_..." required />
+            <p class="description"><?php esc_html_e( 'Copy this from your RenewalFlow dashboard → Integrations tab. It should start with "artly_"', 'artly-reminder-bridge' ); ?></p>
           </td>
         </tr>
       </table>
