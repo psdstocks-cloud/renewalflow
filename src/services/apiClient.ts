@@ -3,7 +3,9 @@ export async function apiFetch<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const baseUrl = import.meta.env.VITE_API_BASE_URL;
-  const apiKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const { supabase } = await import('../lib/supabaseClient');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
 
   if (!baseUrl) {
     throw new Error('Missing VITE_API_BASE_URL environment variable');
@@ -13,7 +15,7 @@ export async function apiFetch<T>(
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'x-admin-api-key': apiKey ?? '',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });

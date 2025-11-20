@@ -21,6 +21,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "react-router-dom": [
+        "./src/router"
       ]
     },
     "allowImportingTsExtensions": true,
