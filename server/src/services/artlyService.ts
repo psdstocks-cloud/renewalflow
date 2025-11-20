@@ -194,7 +194,7 @@ export const expirePoints = async () => {
 
   const affectedCustomers = new Set<bigint>();
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     for (const batch of expiring) {
       await tx.pointsTransaction.create({
         data: {
