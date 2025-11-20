@@ -3,7 +3,14 @@ import { z } from 'zod';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '../config/db';
 
-const TENANT_ID = 'artly';
+const TENANT_ID = 'artly'; // Legacy default, will be overridden by workspaceId
+
+/**
+ * Get tenant ID from workspaceId or use default
+ */
+function getTenantId(workspaceId?: string | null): string {
+  return workspaceId || TENANT_ID;
+}
 
 const pointsEventSchema = z.object({
   external_event_id: z.number().int().optional(),
@@ -57,8 +64,9 @@ const recalculateWalletSnapshot = async (
   });
 };
 
-export const processPointsEvents = async (rawEvents: unknown) => {
+export const processPointsEvents = async (rawEvents: unknown, workspaceId?: string | null) => {
   const events = z.array(pointsEventSchema).parse(rawEvents);
+  const tenantId = getTenantId(workspaceId);
   let imported = 0;
   let skippedExisting = 0;
 
@@ -75,7 +83,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
       const existing = await prisma.pointsTransaction.findUnique({
         where: {
           tenantId_externalEventId: {
-            tenantId: TENANT_ID,
+            tenantId,
             externalEventId,
           },
         },
@@ -91,13 +99,13 @@ export const processPointsEvents = async (rawEvents: unknown) => {
       const customer = await tx.customer.upsert({
         where: {
           tenantId_externalUserId: {
-            tenantId: TENANT_ID,
+            tenantId,
             externalUserId: BigInt(event.wp_user_id),
           },
         },
         update: { email: event.email },
         create: {
-          tenantId: TENANT_ID,
+          tenantId,
           externalUserId: BigInt(event.wp_user_id),
           email: event.email,
         },
@@ -108,7 +116,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
       if (event.points_delta > 0) {
         const batch = await tx.pointsBatch.create({
           data: {
-            tenantId: TENANT_ID,
+            tenantId,
             customerId: customer.id,
             source: event.source,
             externalOrderId: event.order_id,
@@ -122,7 +130,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
 
         await tx.pointsTransaction.create({
           data: {
-            tenantId: TENANT_ID,
+            tenantId,
             customerId: customer.id,
             batchId: batch.id,
             delta: event.points_delta,
@@ -139,7 +147,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
 
         const batches = await tx.pointsBatch.findMany({
           where: {
-            tenantId: TENANT_ID,
+            tenantId,
             customerId: customer.id,
             status: 'active',
             pointsRemaining: { gt: 0 },
@@ -159,7 +167,7 @@ export const processPointsEvents = async (rawEvents: unknown) => {
 
         await tx.pointsTransaction.create({
           data: {
-            tenantId: TENANT_ID,
+            tenantId,
             customerId: customer.id,
             delta: event.points_delta,
             type: 'spend_download',
@@ -223,8 +231,9 @@ export const expirePoints = async () => {
   return { expiredBatches: expiring.length };
 };
 
-export const processSubscriptions = async (rawSubscriptions: unknown) => {
+export const processSubscriptions = async (rawSubscriptions: unknown, workspaceId?: string | null) => {
   const subscriptions = z.array(subscriptionSchema).parse(rawSubscriptions);
+  const tenantId = getTenantId(workspaceId);
   let upserted = 0;
 
   for (const sub of subscriptions) {
@@ -232,13 +241,13 @@ export const processSubscriptions = async (rawSubscriptions: unknown) => {
       ? await prisma.customer.upsert({
           where: {
             tenantId_externalUserId: {
-              tenantId: TENANT_ID,
+              tenantId,
               externalUserId: BigInt(sub.wp_user_id),
             },
           },
           update: { email: sub.email },
           create: {
-            tenantId: TENANT_ID,
+            tenantId,
             externalUserId: BigInt(sub.wp_user_id),
             email: sub.email,
           },
@@ -248,7 +257,7 @@ export const processSubscriptions = async (rawSubscriptions: unknown) => {
     await prisma.subscription.upsert({
       where: {
         tenantId_externalSubscriptionId: {
-          tenantId: TENANT_ID,
+          tenantId,
           externalSubscriptionId: String(sub.external_subscription_id),
         },
       },
@@ -260,7 +269,7 @@ export const processSubscriptions = async (rawSubscriptions: unknown) => {
         customerId: customer?.id,
       },
       create: {
-        tenantId: TENANT_ID,
+        tenantId,
         externalSubscriptionId: String(sub.external_subscription_id),
         status: sub.status,
         planName: sub.plan_name,
@@ -285,15 +294,16 @@ const userSchema = z.object({
   timezone: z.string().optional(),
 });
 
-export const processUsers = async (rawUsers: unknown) => {
+export const processUsers = async (rawUsers: unknown, workspaceId?: string | null) => {
   const users = z.array(userSchema).parse(rawUsers);
+  const tenantId = getTenantId(workspaceId);
   let upserted = 0;
 
   for (const user of users) {
     await prisma.customer.upsert({
       where: {
         tenantId_externalUserId: {
-          tenantId: TENANT_ID,
+          tenantId,
           externalUserId: BigInt(user.wp_user_id),
         },
       },
@@ -305,7 +315,7 @@ export const processUsers = async (rawUsers: unknown) => {
         timezone: user.timezone ?? undefined,
       },
       create: {
-        tenantId: TENANT_ID,
+        tenantId,
         externalUserId: BigInt(user.wp_user_id),
         email: user.email,
         phone: user.phone ?? undefined,
@@ -333,8 +343,9 @@ const chargeSchema = z.object({
   created_at: z.string().datetime(),
 });
 
-export const processCharges = async (rawCharges: unknown) => {
+export const processCharges = async (rawCharges: unknown, workspaceId?: string | null) => {
   const charges = z.array(chargeSchema).parse(rawCharges);
+  const tenantId = getTenantId(workspaceId);
   let upserted = 0;
 
   for (const charge of charges) {
@@ -343,13 +354,13 @@ export const processCharges = async (rawCharges: unknown) => {
       ? await prisma.customer.upsert({
           where: {
             tenantId_externalUserId: {
-              tenantId: TENANT_ID,
+              tenantId,
               externalUserId: BigInt(charge.wp_user_id),
             },
           },
           update: { email: charge.email },
           create: {
-            tenantId: TENANT_ID,
+            tenantId,
             externalUserId: BigInt(charge.wp_user_id),
             email: charge.email,
           },
@@ -362,7 +373,7 @@ export const processCharges = async (rawCharges: unknown) => {
       
       await prisma.pointsTransaction.create({
         data: {
-          tenantId: TENANT_ID,
+          tenantId,
           customerId: customer.id,
           delta: 0, // Charge itself doesn't add points, but we track it
           type: 'charge',

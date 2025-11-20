@@ -10,6 +10,7 @@ import { cronRouter } from './routes/cron';
 import { workspaceRouter } from './routes/workspaces';
 import { errorHandler } from './middleware/errorHandler';
 import { artlyRouter } from './routes/artly';
+import { websiteConnectionRouter } from './routes/websiteConnections';
 import { startCronJobs } from './services/cronScheduler';
 
 const app = express();
@@ -40,6 +41,7 @@ app.use(express.json({ limit: '1mb' }));
 
 app.use(healthRouter);
 app.use(workspaceRouter);
+app.use(websiteConnectionRouter);
 app.use(subscriberRouter);
 app.use(settingsRouter);
 app.use(reminderRouter);

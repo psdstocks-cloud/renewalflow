@@ -208,6 +208,7 @@ model Workspace {
   subscribers Subscriber[]
   emailLogs   EmailLog[]
   appSettings AppSettings[]
+  websiteConnections WebsiteConnection[]
 }
 
 model WorkspaceUser {
@@ -219,4 +220,20 @@ model WorkspaceUser {
   workspace   Workspace  @relation(fields: [workspaceId], references: [id])
 
   @@unique([workspaceId, userId])
+}
+
+model WebsiteConnection {
+  id          String     @id @default(cuid())
+  workspaceId String
+  websiteUrl  String
+  apiKey      String     @unique
+  isActive    Boolean    @default(true)
+  lastSyncAt  DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, websiteUrl])
+  @@index([apiKey])
 }

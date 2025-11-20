@@ -11,7 +11,8 @@ export const artlyRouter = Router();
 
 artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) => {
   try {
-    const result = await processPointsEvents(req.body);
+    const workspaceId = (req as any).workspaceId;
+    const result = await processPointsEvents(req.body, workspaceId);
     res.json(result);
   } catch (error) {
     next(error);
@@ -20,7 +21,8 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
 
 artlyRouter.post('/artly/sync/subscriptions', artlyAuth, async (req, res, next) => {
   try {
-    const result = await processSubscriptions(req.body);
+    const workspaceId = (req as any).workspaceId;
+    const result = await processSubscriptions(req.body, workspaceId);
     res.json(result);
   } catch (error) {
     next(error);
@@ -29,7 +31,8 @@ artlyRouter.post('/artly/sync/subscriptions', artlyAuth, async (req, res, next) 
 
 artlyRouter.post('/artly/sync/users', artlyAuth, async (req, res, next) => {
   try {
-    const result = await processUsers(req.body);
+    const workspaceId = (req as any).workspaceId;
+    const result = await processUsers(req.body, workspaceId);
     res.json(result);
   } catch (error) {
     next(error);
@@ -38,7 +41,8 @@ artlyRouter.post('/artly/sync/users', artlyAuth, async (req, res, next) => {
 
 artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
   try {
-    const result = await processCharges(req.body);
+    const workspaceId = (req as any).workspaceId;
+    const result = await processCharges(req.body, workspaceId);
     res.json(result);
   } catch (error) {
     next(error);
