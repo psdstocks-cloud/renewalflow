@@ -41,12 +41,12 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
 
+# Copy start script from source (needed for migrations)
+COPY server/start.sh ./start.sh
+RUN chmod +x ./start.sh
+
 # Ensure tsx is available (needed for ES module imports)
 RUN npm list tsx || npm install tsx
-
-# Copy and setup start script
-COPY server/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 4000

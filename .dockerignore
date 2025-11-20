@@ -20,4 +20,6 @@ index.tsx
 index.css
 App.tsx
 metadata.json
+# Don't ignore server directory - we need it for the Dockerfile
+!server/
 
