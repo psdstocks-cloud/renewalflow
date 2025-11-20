@@ -43,32 +43,49 @@ import React, {
     // Initial session load + auth state listener
     useEffect(() => {
       let isMounted = true;
-  
+
       const init = async () => {
         setIsLoading(true);
-        const { data, error } = await supabase.auth.getSession();
-  
-        if (!isMounted) return;
-  
-        if (error) {
-          console.error('[Auth] getSession error', error);
-          applySession(null);
-        } else {
-          applySession(data.session ?? null);
-        }
-  
-        setIsLoading(false);
-      };
-  
-      init();
-  
-      const { data: listener } = supabase.auth.onAuthStateChange(
-        (_event, newSession) => {
+        
+        try {
+          const { data, error } = await supabase.auth.getSession();
+
           if (!isMounted) return;
+
+          if (error) {
+            console.error('[Auth] getSession error', error);
+            applySession(null);
+          } else {
+            applySession(data.session ?? null);
+          }
+        } catch (err) {
+          console.error('[Auth] getSession exception', err);
+          if (isMounted) {
+            applySession(null);
+          }
+        } finally {
+          if (isMounted) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      init();
+
+      const { data: listener } = supabase.auth.onAuthStateChange(
+        (event, newSession) => {
+          if (!isMounted) return;
+          
+          console.log('[Auth] State changed:', event, newSession?.user?.email);
           applySession(newSession);
+          
+          // If session was restored, we're no longer loading
+          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            setIsLoading(false);
+          }
         },
       );
-  
+
       return () => {
         isMounted = false;
         listener?.subscription.unsubscribe();
