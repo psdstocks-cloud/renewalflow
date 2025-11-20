@@ -1,8 +1,10 @@
 # Railway/Nixpacks configuration for RenewalFlow backend
 # This tells Railway to build and run the server from the server/ directory
 
+# Nixpacks will auto-detect Node.js version from .nvmrc or package.json
+# If you need to specify explicitly, use a version available in nixpkgs
 [phases.setup]
-nixPkgs = ["nodejs_22"]
+# nixPkgs = ["nodejs"]  # Let it auto-detect
 
 [phases.install]
 cmds = [
