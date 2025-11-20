@@ -17,10 +17,8 @@ import {
 } from '@/src/types';
 import { apiFetch } from '@/src/services/apiClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-
-interface DashboardProps {
-  onLogout: () => void;
-}
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/src/context/AuthContext';
 
 interface SubscriberFormState {
   name: string;
@@ -70,7 +68,9 @@ const statusLabels: Record<SubscriptionStatus, string> = {
   CANCELLED: 'Cancelled',
 };
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
+const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
+  const { signOut } = useAuth();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [subscribersTotal, setSubscribersTotal] = useState(0);
   const [subscriberStats, setSubscriberStats] = useState<SubscriberStats | null>(null);
@@ -102,6 +102,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/auth/sign-in');
+  };
 
   useEffect(() => {
     loadInitialData();
@@ -590,7 +595,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             value={adminWhatsApp.phoneNumber}
             onChange={(e) => setAdminWhatsApp({ phoneNumber: e.target.value })}
           />
-          <button onClick={onLogout} className="w-full text-sm text-gray-400 hover:text-white flex items-center justify-center gap-2 p-2 rounded-lg hover:bg-gray-800 transition-colors">
+          <button onClick={handleLogout} className="w-full text-sm text-gray-400 hover:text-white flex items-center justify-center gap-2 p-2 rounded-lg hover:bg-gray-800 transition-colors">
             <i className="fas fa-sign-out-alt"></i> Logout
           </button>
         </div>
