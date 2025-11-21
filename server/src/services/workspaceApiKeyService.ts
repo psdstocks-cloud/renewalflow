@@ -12,9 +12,12 @@ export async function validateWorkspaceApiKey(apiKey: string): Promise<{ workspa
   }
 
   try {
-    // Find the connection by API key
+    // Trim the API key to remove any whitespace
+    const trimmedKey = apiKey.trim();
+    
+    // Find the connection by API key (exact match, case-sensitive)
     const connection = await prisma.websiteConnection.findUnique({
-      where: { apiKey },
+      where: { apiKey: trimmedKey },
       select: {
         id: true,
         workspaceId: true,
@@ -23,7 +26,33 @@ export async function validateWorkspaceApiKey(apiKey: string): Promise<{ workspa
     });
 
     if (!connection) {
-      console.log('[validateWorkspaceApiKey] No connection found for API key:', apiKey.substring(0, 20) + '...');
+      // Debug: Try to find any connection with similar key (first 30 chars)
+      const similarKeys = await prisma.websiteConnection.findMany({
+        where: {
+          apiKey: {
+            startsWith: trimmedKey.substring(0, 30),
+          },
+        },
+        select: {
+          id: true,
+          websiteUrl: true,
+          apiKey: true,
+          isActive: true,
+        },
+        take: 5,
+      });
+      
+      console.log('[validateWorkspaceApiKey] No exact match found for API key:', trimmedKey.substring(0, 30) + '...');
+      console.log('[validateWorkspaceApiKey] Key length:', trimmedKey.length);
+      console.log('[validateWorkspaceApiKey] Found', similarKeys.length, 'similar keys (first 30 chars match)');
+      
+      if (similarKeys.length > 0) {
+        console.log('[validateWorkspaceApiKey] Similar keys in database:');
+        similarKeys.forEach((k, i) => {
+          console.log(`  [${i}] URL: ${k.websiteUrl}, Key: ${k.apiKey.substring(0, 30)}...${k.apiKey.substring(k.apiKey.length - 10)}, Length: ${k.apiKey.length}, Active: ${k.isActive}`);
+        });
+      }
+      
       return null;
     }
 
