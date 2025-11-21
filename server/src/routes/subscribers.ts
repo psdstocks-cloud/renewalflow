@@ -8,7 +8,9 @@ import {
   listSubscribers,
   subscriberStats,
   syncCustomersToSubscribers,
-  updateSubscriber
+  updateSubscriber,
+  getSyncProgress,
+  clearSyncProgress,
 } from '../services/subscriberService';
 import { z } from 'zod';
 import { getSettings } from '../services/settingsService';
@@ -124,12 +126,54 @@ subscriberRouter.post('/api/subscribers/sync-from-artly', async (req, res, next)
       return res.status(404).json({ message: 'Workspace not found for user' });
     }
 
-    const summary = await syncCustomersToSubscribers(workspaceUser.workspaceId);
+    // Start sync in background (don't await)
+    syncCustomersToSubscribers(workspaceUser.workspaceId).catch((error) => {
+      console.error('[sync-from-artly] Sync error:', error);
+      const progress = getSyncProgress(workspaceUser.workspaceId);
+      if (progress) {
+        progress.status = 'error';
+        progress.message = error.message || 'Sync failed';
+        progress.endTime = new Date();
+      }
+    });
+
+    // Return immediately with initial progress
     res.json({
       success: true,
-      message: `Synced ${summary.created} new and ${summary.updated} existing subscribers from ${summary.total} customers`,
-      ...summary
+      message: 'Sync started',
+      syncStarted: true,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get sync progress
+subscriberRouter.get('/api/subscribers/sync-progress', async (req, res, next) => {
+  try {
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
+
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
+
+    const progress = getSyncProgress(workspaceUser.workspaceId);
+    
+    if (!progress) {
+      return res.json({
+        status: 'idle',
+        message: 'No sync in progress',
+      });
+    }
+
+    res.json(progress);
   } catch (error) {
     next(error);
   }

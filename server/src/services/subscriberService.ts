@@ -117,8 +117,40 @@ export async function subscriberStats(referenceDate: Date, expiringThresholdDays
  * Sync Customers from Artly integration to Subscriber records
  * This converts Customer records (from WordPress sync) into Subscriber records (for frontend display)
  */
-export async function syncCustomersToSubscribers(workspaceId: string) {
+// In-memory progress tracking for sync operations
+const syncProgressMap = new Map<string, {
+  status: 'running' | 'completed' | 'error';
+  processed: number;
+  total: number;
+  created: number;
+  updated: number;
+  message: string;
+  startTime: Date;
+  endTime?: Date;
+}>();
+
+export function getSyncProgress(workspaceId: string) {
+  return syncProgressMap.get(workspaceId) || null;
+}
+
+export function clearSyncProgress(workspaceId: string) {
+  syncProgressMap.delete(workspaceId);
+}
+
+export async function syncCustomersToSubscribers(workspaceId: string, updateProgress?: (progress: { processed: number; total: number; created: number; updated: number }) => void) {
   const tenantId = workspaceId; // tenantId = workspaceId for Artly integration
+  
+  // Initialize progress
+  const startTime = new Date();
+  syncProgressMap.set(workspaceId, {
+    status: 'running',
+    processed: 0,
+    total: 0,
+    created: 0,
+    updated: 0,
+    message: 'Starting sync...',
+    startTime,
+  });
   
   // Get all customers for this workspace/tenant
   const customers = await prisma.customer.findMany({
@@ -139,11 +171,23 @@ export async function syncCustomersToSubscribers(workspaceId: string) {
     }
   });
 
+  const total = customers.length;
+  syncProgressMap.set(workspaceId, {
+    status: 'running',
+    processed: 0,
+    total,
+    created: 0,
+    updated: 0,
+    message: `Processing ${total} customers...`,
+    startTime,
+  });
+
   let created = 0;
   let updated = 0;
   const wsId = workspaceId || await getDefaultWorkspaceId();
 
-  for (const customer of customers) {
+  for (let i = 0; i < customers.length; i++) {
+    const customer = customers[i];
     // Get the most recent active subscription or use defaults
     const subscription = customer.subscriptions[0];
     
@@ -216,7 +260,41 @@ export async function syncCustomersToSubscribers(workspaceId: string) {
       });
       created += 1;
     }
+
+    // Update progress
+    const processed = i + 1;
+    const progress = {
+      status: 'running' as const,
+      processed,
+      total,
+      created,
+      updated,
+      message: `Processed ${processed} of ${total} customers...`,
+      startTime,
+    };
+    syncProgressMap.set(workspaceId, progress);
+    if (updateProgress) {
+      updateProgress({ processed, total, created, updated });
+    }
   }
+
+  const endTime = new Date();
+  const finalProgress = {
+    status: 'completed' as const,
+    processed: total,
+    total,
+    created,
+    updated,
+    message: `Successfully synced ${created} new and ${updated} existing subscribers.`,
+    startTime,
+    endTime,
+  };
+  syncProgressMap.set(workspaceId, finalProgress);
+
+  // Clear progress after 5 minutes
+  setTimeout(() => {
+    syncProgressMap.delete(workspaceId);
+  }, 5 * 60 * 1000);
 
   return { created, updated, total: customers.length };
 }

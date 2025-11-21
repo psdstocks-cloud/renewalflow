@@ -90,6 +90,17 @@ const Dashboard: React.FC = () => {
   const [isSyncingWoo, setIsSyncingWoo] = useState(false);
   const [syncLog, setSyncLog] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<{
+    status: 'running' | 'completed' | 'error' | 'idle';
+    processed: number;
+    total: number;
+    created: number;
+    updated: number;
+    message: string;
+    startTime?: string;
+    endTime?: string;
+  } | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [importText, setImportText] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
@@ -543,24 +554,84 @@ const Dashboard: React.FC = () => {
     setIsSyncingFromWordPress(true);
     setError(null);
     setSuccessMessage(null);
+    setSyncProgress({ status: 'running', processed: 0, total: 0, created: 0, updated: 0, message: 'Starting sync...' });
+    
     try {
-      const response = await apiFetch<{ success: boolean; message: string; created: number; updated: number; total: number }>('/api/subscribers/sync-from-artly', {
+      // Start sync
+      await apiFetch<{ success: boolean; message: string; syncStarted: boolean }>('/api/subscribers/sync-from-artly', {
         method: 'POST',
       });
       
-      const message = response.message || `Successfully synced ${response.created} new and ${response.updated} existing subscribers from WordPress.`;
-      setSuccessMessage(message);
-      setTimeout(() => setSuccessMessage(null), 8000);
+      // Poll for progress
+      const pollProgress = async () => {
+        const maxAttempts = 300; // 5 minutes max (300 * 1 second)
+        let attempts = 0;
+        
+        const poll = async () => {
+          try {
+            const progress = await apiFetch<{
+              status: 'running' | 'completed' | 'error' | 'idle';
+              processed: number;
+              total: number;
+              created: number;
+              updated: number;
+              message: string;
+              startTime?: string;
+              endTime?: string;
+            }>('/api/subscribers/sync-progress');
+            
+            setSyncProgress(progress);
+            
+            if (progress.status === 'completed') {
+              setLastSyncTime(new Date());
+              const message = progress.message || `Successfully synced ${progress.created} new and ${progress.updated} existing subscribers from WordPress.`;
+              setSuccessMessage(message);
+              setTimeout(() => setSuccessMessage(null), 8000);
+              
+              // Refresh subscribers list
+              await refreshSubscribersAndStats();
+              
+              // Clear progress after 3 seconds
+              setTimeout(() => {
+                setSyncProgress(null);
+              }, 3000);
+              
+              setIsSyncingFromWordPress(false);
+            } else if (progress.status === 'error') {
+              setError(progress.message || 'Sync failed');
+              setTimeout(() => setError(null), 8000);
+              setIsSyncingFromWordPress(false);
+              
+              // Clear progress after 5 seconds
+              setTimeout(() => {
+                setSyncProgress(null);
+              }, 5000);
+            } else if (progress.status === 'running' && attempts < maxAttempts) {
+              attempts++;
+              setTimeout(poll, 1000); // Poll every second
+            } else if (attempts >= maxAttempts) {
+              setError('Sync timed out. Please try again.');
+              setIsSyncingFromWordPress(false);
+              setSyncProgress(null);
+            }
+          } catch (err) {
+            console.error('Error polling progress:', err);
+            setIsSyncingFromWordPress(false);
+            setSyncProgress(null);
+          }
+        };
+        
+        poll();
+      };
       
-      // Refresh subscribers list
-      await refreshSubscribersAndStats();
+      pollProgress();
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err.message || 'Failed to sync subscribers from WordPress. Make sure you have synced customers from WordPress first.';
+      const errorMessage = err.message || 'Failed to start sync. Make sure you have synced customers from WordPress first.';
       setError(errorMessage);
       setTimeout(() => setError(null), 8000);
-    } finally {
       setIsSyncingFromWordPress(false);
+      setSyncProgress(null);
     }
   };
 
@@ -818,6 +889,8 @@ const Dashboard: React.FC = () => {
             onImport={() => setShowImportModal(true)}
             onSyncFromWordPress={handleSyncFromWordPress}
             isSyncingFromWordPress={isSyncingFromWordPress}
+            syncProgress={syncProgress}
+            lastSyncTime={lastSyncTime}
             onEdit={openEditModal}
             onDelete={handleDeleteSub}
             total={subscribersTotal}
@@ -1097,6 +1170,8 @@ const SubscribersTab = ({
   onImport,
   onSyncFromWordPress,
   isSyncingFromWordPress,
+  syncProgress,
+  lastSyncTime,
   onEdit,
   onDelete,
   total,
@@ -1110,6 +1185,17 @@ const SubscribersTab = ({
   onImport: () => void;
   onSyncFromWordPress: () => void;
   isSyncingFromWordPress: boolean;
+  syncProgress: {
+    status: 'running' | 'completed' | 'error' | 'idle';
+    processed: number;
+    total: number;
+    created: number;
+    updated: number;
+    message: string;
+    startTime?: string;
+    endTime?: string;
+  } | null;
+  lastSyncTime: Date | null;
   onEdit: (sub: Subscriber) => void;
   onDelete: (id: string) => void;
   total: number;
@@ -1124,7 +1210,15 @@ const SubscribersTab = ({
   return (
   <div className="max-w-7xl mx-auto animate-fade-in-up">
     <div className="flex justify-between items-center mb-8">
-      <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Subscribers ({total})</h1>
+      <div>
+        <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Subscribers ({total})</h1>
+        {lastSyncTime && !isSyncingFromWordPress && (
+          <div className="mt-2 text-sm text-gray-500 flex items-center gap-2">
+            <i className="fas fa-clock"></i>
+            <span>Last synced: {lastSyncTime.toLocaleString()}</span>
+          </div>
+        )}
+      </div>
       <div className="flex gap-3">
         <button 
           onClick={onSyncFromWordPress} 
@@ -1155,6 +1249,103 @@ const SubscribersTab = ({
         </button>
       </div>
     </div>
+    
+    {/* Progress Indicator */}
+    {syncProgress && syncProgress.status !== 'idle' && (
+      <div className="mb-8 bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 p-6 animate-fade-in-up">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            {syncProgress.status === 'running' && (
+              <i className="fas fa-spinner fa-spin text-primary text-xl"></i>
+            )}
+            {syncProgress.status === 'completed' && (
+              <i className="fas fa-check-circle text-green-500 text-xl"></i>
+            )}
+            {syncProgress.status === 'error' && (
+              <i className="fas fa-exclamation-circle text-red-500 text-xl"></i>
+            )}
+            <div>
+              <h3 className="font-bold text-gray-900 text-lg">
+                {syncProgress.status === 'running' && 'Syncing from WordPress...'}
+                {syncProgress.status === 'completed' && 'Sync Completed!'}
+                {syncProgress.status === 'error' && 'Sync Failed'}
+              </h3>
+              <p className="text-sm text-gray-600">{syncProgress.message}</p>
+            </div>
+          </div>
+          {syncProgress.status === 'running' && syncProgress.startTime && (
+            <div className="text-xs text-gray-500">
+              Started: {new Date(syncProgress.startTime).toLocaleTimeString()}
+            </div>
+          )}
+        </div>
+        
+        {/* Progress Bar */}
+        {syncProgress.total > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-gray-700">
+                Progress: {syncProgress.processed} / {syncProgress.total}
+              </span>
+              <span className="text-sm font-bold text-primary">
+                {Math.round((syncProgress.processed / syncProgress.total) * 100)}%
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-inner">
+              <div 
+                className={`h-full rounded-full transition-all duration-300 ease-out ${
+                  syncProgress.status === 'completed' 
+                    ? 'bg-gradient-to-r from-green-500 to-green-600' 
+                    : syncProgress.status === 'error'
+                    ? 'bg-gradient-to-r from-red-500 to-red-600'
+                    : 'bg-gradient-to-r from-primary to-indigo-600'
+                }`}
+                style={{ 
+                  width: `${Math.min((syncProgress.processed / syncProgress.total) * 100, 100)}%`,
+                  transition: 'width 0.5s ease-out'
+                }}
+              >
+                <div className="h-full bg-white/30 animate-pulse"></div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Sync Counters */}
+        <div className="grid grid-cols-3 gap-4 mt-4">
+          <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+            <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">Total</div>
+            <div className="text-2xl font-bold text-blue-700">{syncProgress.total}</div>
+            <div className="text-xs text-blue-500">customers</div>
+          </div>
+          <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+            <div className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1">Created</div>
+            <div className="text-2xl font-bold text-green-700">{syncProgress.created}</div>
+            <div className="text-xs text-green-500">new subscribers</div>
+          </div>
+          <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
+            <div className="text-xs font-semibold text-purple-600 uppercase tracking-wide mb-1">Updated</div>
+            <div className="text-2xl font-bold text-purple-700">{syncProgress.updated}</div>
+            <div className="text-xs text-purple-500">existing</div>
+          </div>
+        </div>
+        
+        {/* Time Display */}
+        {syncProgress.endTime && (
+          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+            <span>
+              <i className="fas fa-clock mr-1"></i>
+              Completed: {new Date(syncProgress.endTime).toLocaleString()}
+            </span>
+            {syncProgress.startTime && (
+              <span>
+                Duration: {Math.round((new Date(syncProgress.endTime).getTime() - new Date(syncProgress.startTime).getTime()) / 1000)}s
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    )}
 
     <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 overflow-hidden">
       <div className="overflow-x-auto">
