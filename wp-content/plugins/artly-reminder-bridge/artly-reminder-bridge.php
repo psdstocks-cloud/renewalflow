@@ -224,7 +224,15 @@ function artly_sync_points_balances_from_woo(): array {
   $batches = array_chunk( $balances, $batch_size );
   $total_batches = count( $batches );
 
-  foreach ( $batches as $batch ) {
+  foreach ( $batches as $batch_num => $batch ) {
+    // Check for cancel flag before each batch
+    if ( get_option( ARB_SYNC_CANCEL_FLAG, false ) ) {
+      $msg = sprintf( 'Sync cancelled by user. Processed %d of %d batches.', $batch_num, $total_batches );
+      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $msg, 'count' => $total_updated ) );
+      delete_option( ARB_SYNC_CANCEL_FLAG );
+      return array( 'success' => false, 'message' => $msg, 'count' => $total_updated );
+    }
+    
     $result = artly_reminder_bridge_post_balances( $batch );
     if ( null === $result ) {
       $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during points balance sync' );
@@ -233,6 +241,9 @@ function artly_sync_points_balances_from_woo(): array {
     }
     $total_updated += (int) ( $result['updated'] ?? count( $batch ) );
   }
+  
+  // Clear cancel flag on successful completion
+  delete_option( ARB_SYNC_CANCEL_FLAG );
 
   $msg = sprintf( 'Successfully synced %d points balances', $total_updated );
   artly_reminder_bridge_log( $msg );
