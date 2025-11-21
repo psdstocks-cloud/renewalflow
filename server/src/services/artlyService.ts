@@ -287,19 +287,55 @@ export const processSubscriptions = async (rawSubscriptions: unknown, workspaceI
 
 const userSchema = z.object({
   wp_user_id: z.number().int(),
-  email: z.string().email(),
-  phone: z.string().optional(),
-  whatsapp: z.string().optional(),
-  locale: z.string().optional(),
-  timezone: z.string().optional(),
+  email: z.string().email().or(z.string().min(1)), // Allow non-email strings but log them
+  first_name: z.string().optional().nullable(),
+  last_name: z.string().optional().nullable(),
+  phone: z.string().nullable().optional(),
+  whatsapp: z.string().nullable().optional(),
+  locale: z.string().nullable().optional(),
+  timezone: z.string().nullable().optional(),
 });
 
 export const processUsers = async (rawUsers: unknown, workspaceId?: string | null) => {
-  const users = z.array(userSchema).parse(rawUsers);
+  // Use safeParse to handle validation errors gracefully
+  const parseResult = z.array(userSchema).safeParse(rawUsers);
+  
+  if (!parseResult.success) {
+    console.error('[processUsers] Validation errors:', parseResult.error.errors);
+    // Filter out invalid users and continue with valid ones
+    const validUsers: any[] = [];
+    const rawUsersArray = Array.isArray(rawUsers) ? rawUsers : [];
+    
+    for (let i = 0; i < rawUsersArray.length; i++) {
+      const userResult = userSchema.safeParse(rawUsersArray[i]);
+      if (userResult.success) {
+        validUsers.push(userResult.data);
+      } else {
+        console.warn(`[processUsers] Skipping invalid user at index ${i}:`, userResult.error.errors);
+      }
+    }
+    
+    if (validUsers.length === 0) {
+      throw new Error('No valid users found in the payload');
+    }
+    
+    return await processUsersInternal(validUsers, workspaceId);
+  }
+  
+  return await processUsersInternal(parseResult.data, workspaceId);
+};
+
+const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspaceId?: string | null) => {
   const tenantId = getTenantId(workspaceId);
   let upserted = 0;
 
   for (const user of users) {
+    // Skip users with invalid emails
+    if (!user.email || !user.email.includes('@')) {
+      console.warn(`[processUsers] Skipping user ${user.wp_user_id} with invalid email: ${user.email}`);
+      continue;
+    }
+    
     await prisma.customer.upsert({
       where: {
         tenantId_externalUserId: {
@@ -311,7 +347,7 @@ export const processUsers = async (rawUsers: unknown, workspaceId?: string | nul
         email: user.email,
         phone: user.phone ?? undefined,
         whatsapp: user.whatsapp ?? undefined,
-        locale: user.locale ?? 'en',
+        locale: user.locale ?? undefined,
         timezone: user.timezone ?? undefined,
       },
       create: {
@@ -320,7 +356,7 @@ export const processUsers = async (rawUsers: unknown, workspaceId?: string | nul
         email: user.email,
         phone: user.phone ?? undefined,
         whatsapp: user.whatsapp ?? undefined,
-        locale: user.locale ?? 'en',
+        locale: user.locale ?? undefined,
         timezone: user.timezone ?? undefined,
       },
     });
