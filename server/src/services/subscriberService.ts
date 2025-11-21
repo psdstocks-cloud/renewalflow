@@ -1,26 +1,9 @@
 import { prisma } from '../config/db';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { addDays } from 'date-fns';
 
-// Subscriber type from Prisma (will be available after prisma generate)
-type Subscriber = {
-  id: string;
-  workspaceId: string;
-  name: string;
-  email: string;
-  phone?: string | null;
-  planName: string;
-  amount: number;
-  currency: string;
-  pointsRemaining: number;
-  status: string;
-  startDate: Date;
-  endDate: Date;
-  paymentLink?: string | null;
-  lastNotifiedAt?: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
+type Subscriber = Prisma.SubscriberGetPayload<{}>;
 
 const subscriberSchema = z.object({
   name: z.string(),
