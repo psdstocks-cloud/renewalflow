@@ -770,11 +770,12 @@ function artly_reminder_bridge_handle_post(): ?string {
   }
 
   if ( isset( $_POST['artly_sync_points'] ) ) {
-    $result = artly_sync_points_from_woo();
+    // Manual sync now uses balance sync, not event sync
+    $result = artly_sync_points_balances_from_woo();
     if ( $result['success'] ) {
       $msg = $result['message'];
-      if ( $result['count'] > 0 && isset( $result['total'] ) ) {
-        $msg .= ' (' . $result['count'] . ' of ' . $result['total'] . ' events)';
+      if ( $result['count'] > 0 ) {
+        $msg .= ' (' . $result['count'] . ' user balances)';
       }
       return '<span style="color: green;">✅ ' . esc_html( $msg ) . '</span>';
     }
