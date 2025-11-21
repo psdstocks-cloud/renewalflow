@@ -1,9 +1,9 @@
 import { prisma } from '../config/db';
-import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { addDays } from 'date-fns';
 
-type Subscriber = Prisma.SubscriberGetPayload<{}>;
+// Get Subscriber type from Prisma query return type
+type Subscriber = Awaited<ReturnType<typeof prisma.subscriber.findUnique>>;
 
 const subscriberSchema = z.object({
   name: z.string(),
