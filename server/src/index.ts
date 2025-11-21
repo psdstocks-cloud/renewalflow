@@ -62,6 +62,17 @@ app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '1mb' }));
 
+// Log all incoming requests (for debugging)
+app.use((req, res, next) => {
+  console.log(`[Request] ${req.method} ${req.path}`);
+  console.log(`[Request] Headers:`, {
+    'x-artly-secret': req.headers['x-artly-secret'] ? req.headers['x-artly-secret'].substring(0, 30) + '...' : 'missing',
+    'content-type': req.headers['content-type'],
+    'origin': req.headers['origin'],
+  });
+  next();
+});
+
 app.use(healthRouter);
 app.use(workspaceRouter);
 app.use(websiteConnectionRouter);
