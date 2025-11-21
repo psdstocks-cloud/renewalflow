@@ -3,23 +3,28 @@ import { env } from '../config/env';
 import { validateWorkspaceApiKey } from '../services/workspaceApiKeyService';
 
 export const artlyAuth = async (req: Request, res: Response, next: NextFunction) => {
+  console.log('[artlyAuth] ===== MIDDLEWARE CALLED =====');
+  console.log('[artlyAuth] Method:', req.method);
+  console.log('[artlyAuth] Path:', req.path);
+  console.log('[artlyAuth] URL:', req.url);
+  
   // Check for workspace-specific API key (from WebsiteConnection)
   // Express normalizes headers to lowercase, so 'X-Artly-Secret' becomes 'x-artly-secret'
   const apiKey = (req.headers['x-artly-secret'] as string)?.trim();
   
   // Log all headers for debugging
-  console.log('[artlyAuth] Received headers:', {
-    'x-artly-secret': apiKey ? apiKey.substring(0, 20) + '...' : 'missing',
-    'x-admin-api-key': req.headers['x-admin-api-key'] ? 'present' : 'missing',
-    'content-type': req.headers['content-type'],
-  });
+  console.log('[artlyAuth] All headers:', Object.keys(req.headers));
+  console.log('[artlyAuth] x-artly-secret header:', apiKey ? `Present (length: ${apiKey.length})` : 'MISSING');
+  console.log('[artlyAuth] x-artly-secret value (first 30):', apiKey ? apiKey.substring(0, 30) + '...' : 'N/A');
+  console.log('[artlyAuth] x-artly-secret value (last 10):', apiKey ? '...' + apiKey.substring(apiKey.length - 10) : 'N/A');
   
   if (!apiKey) {
-    console.log('[artlyAuth] Missing x-artly-secret header');
+    console.log('[artlyAuth] ❌ Missing x-artly-secret header - returning 401');
     return res.status(401).json({ error: 'Missing API key. Please send the API key in the x-artly-secret header.' });
   }
 
-  console.log('[artlyAuth] Validating API key:', apiKey.substring(0, 30) + '...');
+  console.log('[artlyAuth] ✅ API key present, validating...');
+  console.log('[artlyAuth] Full API key:', apiKey);
 
   try {
     // Validate the API key and get workspace info
