@@ -10,6 +10,20 @@ import { prisma } from '../config/db';
 
 export const artlyRouter = Router();
 
+// Simple test endpoint (NO AUTH - to verify requests reach the server)
+artlyRouter.get('/artly/test', async (req, res) => {
+  console.log('[artly/test] Test endpoint called!');
+  console.log('[artly/test] Headers:', req.headers);
+  return res.json({ 
+    message: 'Test endpoint reached successfully!',
+    timestamp: new Date().toISOString(),
+    headers: {
+      'x-artly-secret': req.headers['x-artly-secret'] ? 'present' : 'missing',
+      'content-type': req.headers['content-type'],
+    }
+  });
+});
+
 // Debug endpoint to check API key (NO AUTH - for debugging)
 artlyRouter.get('/artly/debug/key-check', async (req, res) => {
   const apiKey = (req.headers['x-artly-secret'] as string)?.trim();
