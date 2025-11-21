@@ -17,6 +17,7 @@ const ARB_ENGINE_SECRET_OPTION  = '_artly_reminder_engine_secret';
 const ARB_CRON_HOOK             = 'artly_points_sync_cron';
 const ARB_LAST_SYNC_RESULT      = '_artly_last_sync_result';
 const ARB_LAST_SYNC_ERROR       = '_artly_last_sync_error';
+const ARB_SYNC_PROGRESS_OPTION  = '_artly_sync_progress';
 
 register_activation_hook( __FILE__, 'artly_reminder_bridge_activate' );
 function artly_reminder_bridge_activate(): void {
@@ -155,12 +156,31 @@ function artly_sync_points_from_woo(): array {
     $msg = 'Woo Points & Rewards table not found; skipping sync.';
     artly_reminder_bridge_log( $msg );
     update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    delete_option( ARB_SYNC_PROGRESS_OPTION );
     return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
+
+  // Count total events to sync for progress tracking
+  $total_count_query = $wpdb->prepare(
+    "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
+    (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 )
+  );
+  $total_to_sync = (int) $wpdb->get_var( $total_count_query );
+
+  // Initialize progress
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'points',
+    'status' => 'running',
+    'processed' => 0,
+    'total' => $total_to_sync,
+    'imported' => 0,
+    'message' => 'Starting sync...',
+  ) );
 
   $last_id        = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
   $total_imported = 0;
   $total_processed = 0;
+  $batch_number = 0;
 
   while ( true ) {
     $rows = artly_reminder_bridge_fetch_events_batch( $wpdb, $last_id );
@@ -169,6 +189,7 @@ function artly_sync_points_from_woo(): array {
       break;
     }
 
+    $batch_number++;
     $payload = array();
 
     foreach ( $rows as $row ) {
@@ -181,13 +202,40 @@ function artly_sync_points_from_woo(): array {
     if ( empty( $payload ) ) {
       $last_id = (int) end( $rows )->id;
       update_option( ARB_LAST_LOG_ID_OPTION, $last_id );
+      // Update progress
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'points',
+        'status' => 'running',
+        'processed' => $total_processed,
+        'total' => $total_to_sync,
+        'imported' => $total_imported,
+        'message' => sprintf( 'Processing batch %d...', $batch_number ),
+      ) );
       continue;
     }
+
+    // Update progress before sending batch
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'points',
+      'status' => 'running',
+      'processed' => $total_processed,
+      'total' => $total_to_sync,
+      'imported' => $total_imported,
+      'message' => sprintf( 'Sending batch %d (%d events)...', $batch_number, count( $payload ) ),
+    ) );
 
     $result = artly_reminder_bridge_post_events( $payload );
     if ( null === $result ) {
       $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during points sync' );
       update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $error, 'count' => $total_imported ) );
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'points',
+        'status' => 'error',
+        'processed' => $total_processed,
+        'total' => $total_to_sync,
+        'imported' => $total_imported,
+        'message' => $error,
+      ) );
       return array( 'success' => false, 'message' => $error, 'count' => $total_imported );
     }
 
@@ -197,17 +245,44 @@ function artly_sync_points_from_woo(): array {
     $batch_imported = (int) ( $result['imported'] ?? count( $payload ) );
     $total_imported += $batch_imported;
     $total_processed += count( $payload );
+
+    // Update progress after batch
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'points',
+      'status' => 'running',
+      'processed' => $total_processed,
+      'total' => $total_to_sync,
+      'imported' => $total_imported,
+      'message' => sprintf( 'Processed batch %d: %d imported', $batch_number, $batch_imported ),
+    ) );
   }
 
+  // Final progress update
   if ( $total_imported > 0 ) {
     $msg = sprintf( 'Successfully synced %d points events (up to ID %d)', $total_imported, $last_id );
     artly_reminder_bridge_log( $msg );
     update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => $total_imported, 'total' => $total_processed ) );
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'points',
+      'status' => 'completed',
+      'processed' => $total_processed,
+      'total' => $total_to_sync,
+      'imported' => $total_imported,
+      'message' => $msg,
+    ) );
     return array( 'success' => true, 'message' => $msg, 'count' => $total_imported, 'total' => $total_processed );
   }
   
   $msg = 'No new points events to sync.';
   update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => 0 ) );
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'points',
+    'status' => 'completed',
+    'processed' => 0,
+    'total' => 0,
+    'imported' => 0,
+    'message' => $msg,
+  ) );
   return array( 'success' => true, 'message' => $msg, 'count' => 0 );
 }
 
@@ -417,6 +492,16 @@ function artly_sync_charges_from_woo(): array {
 }
 
 add_action( 'admin_menu', 'artly_reminder_bridge_admin_menu' );
+add_action( 'wp_ajax_artly_get_sync_progress', 'artly_get_sync_progress' );
+function artly_get_sync_progress() {
+  check_ajax_referer( 'artly_sync_progress', '_wpnonce' );
+  $progress = get_option( ARB_SYNC_PROGRESS_OPTION, null );
+  if ( $progress ) {
+    wp_send_json_success( $progress );
+  } else {
+    wp_send_json_success( array( 'status' => 'idle' ) );
+  }
+}
 function artly_reminder_bridge_admin_menu(): void {
   add_submenu_page(
     'woocommerce',
@@ -632,9 +717,17 @@ function artly_reminder_bridge_render_admin_page(): void {
           </span>
         </p>
         <p>
-          <button type="submit" name="artly_sync_points" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
+          <button type="submit" name="artly_sync_points" value="1" class="button button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
           <span class="description"><?php esc_html_e( 'Sync points events and logs from WooCommerce Points & Rewards', 'artly-reminder-bridge' ); ?></span>
         </p>
+        <div id="artly-sync-progress" style="display: none; margin-top: 10px; padding: 10px; background: #f0f0f0; border-left: 4px solid #2271b1; max-width: 700px;">
+          <p style="margin: 0 0 5px 0;"><strong><?php esc_html_e( 'Sync Progress', 'artly-reminder-bridge' ); ?>:</strong></p>
+          <div id="artly-progress-message" style="margin-bottom: 5px;"></div>
+          <div style="background: #fff; border: 1px solid #ddd; border-radius: 3px; height: 20px; overflow: hidden;">
+            <div id="artly-progress-bar" style="background: #2271b1; height: 100%; width: 0%; transition: width 0.3s;"></div>
+          </div>
+          <p id="artly-progress-stats" style="margin: 5px 0 0 0; font-size: 12px; color: #666;"></p>
+        </div>
         <p>
           <button type="submit" name="artly_sync_charges" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
           <span class="description"><?php esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine', 'artly-reminder-bridge' ); ?></span>
@@ -642,5 +735,110 @@ function artly_reminder_bridge_render_admin_page(): void {
       </form>
     </div>
   </div>
+  <script>
+  (function() {
+    const syncBtn = document.getElementById('artly-sync-points-btn');
+    const progressDiv = document.getElementById('artly-sync-progress');
+    const progressMessage = document.getElementById('artly-progress-message');
+    const progressBar = document.getElementById('artly-progress-bar');
+    const progressStats = document.getElementById('artly-progress-stats');
+    let progressInterval = null;
+
+    function updateProgress() {
+      fetch(ajaxurl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          action: 'artly_get_sync_progress',
+          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_progress' ); ?>',
+        }),
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.data) {
+          const progress = data.data;
+          
+          if (progress.status === 'running') {
+            progressDiv.style.display = 'block';
+            progressMessage.textContent = progress.message || 'Syncing...';
+            
+            const percentage = progress.total > 0 
+              ? Math.round((progress.processed / progress.total) * 100) 
+              : 0;
+            progressBar.style.width = percentage + '%';
+            
+            progressStats.textContent = `Processed: ${progress.processed} / ${progress.total} | Imported: ${progress.imported}`;
+            
+            // Continue polling
+            setTimeout(updateProgress, 1000);
+          } else if (progress.status === 'completed') {
+            progressDiv.style.display = 'block';
+            progressMessage.textContent = progress.message || 'Sync completed!';
+            progressBar.style.width = '100%';
+            progressBar.style.background = '#46b450';
+            progressStats.textContent = `Total processed: ${progress.processed} | Total imported: ${progress.imported}`;
+            
+            if (syncBtn) {
+              syncBtn.disabled = false;
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+            }
+            
+            // Clear progress after 5 seconds
+            setTimeout(() => {
+              progressDiv.style.display = 'none';
+              delete_option('_artly_sync_progress');
+            }, 5000);
+          } else if (progress.status === 'error') {
+            progressDiv.style.display = 'block';
+            progressMessage.textContent = progress.message || 'Sync failed!';
+            progressBar.style.background = '#dc3232';
+            progressStats.textContent = `Processed: ${progress.processed} / ${progress.total}`;
+            
+            if (syncBtn) {
+              syncBtn.disabled = false;
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+            }
+          } else {
+            // No active sync, stop polling
+            if (syncBtn) {
+              syncBtn.disabled = false;
+            }
+          }
+        } else {
+          // No progress data, stop polling
+          if (syncBtn) {
+            syncBtn.disabled = false;
+          }
+        }
+      })
+      .catch(error => {
+        console.error('Error fetching progress:', error);
+        if (syncBtn) {
+          syncBtn.disabled = false;
+        }
+      });
+    }
+
+    if (syncBtn) {
+      syncBtn.addEventListener('click', function() {
+        this.disabled = true;
+        this.textContent = '<?php esc_html_e( 'Syncing...', 'artly-reminder-bridge' ); ?>';
+        progressDiv.style.display = 'block';
+        progressMessage.textContent = 'Starting sync...';
+        progressBar.style.width = '0%';
+        progressBar.style.background = '#2271b1';
+        progressStats.textContent = '';
+        
+        // Start polling after a short delay
+        setTimeout(updateProgress, 500);
+      });
+    }
+
+    // Check for existing sync on page load
+    updateProgress();
+  })();
+  </script>
   <?php
 }

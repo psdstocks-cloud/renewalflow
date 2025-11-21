@@ -19,8 +19,19 @@ const pointsEventSchema = z.object({
   points_delta: z.number().int(),
   event_type: z.string(),
   source: z.string(),
-  order_id: z.string().optional(),
-  created_at: z.string().datetime(),
+  order_id: z.string().optional().nullable().transform(val => val === null ? undefined : val),
+  created_at: z.string().datetime().or(z.string().transform((val) => {
+    // Try to parse and reformat if not already in ISO format
+    try {
+      const date = new Date(val);
+      if (isNaN(date.getTime())) {
+        return new Date().toISOString();
+      }
+      return date.toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  })),
 });
 
 const subscriptionSchema = z.object({
@@ -65,7 +76,47 @@ const recalculateWalletSnapshot = async (
 };
 
 export const processPointsEvents = async (rawEvents: unknown, workspaceId?: string | null) => {
-  const events = z.array(pointsEventSchema).parse(rawEvents);
+  // Preprocess events to handle null values and invalid datetime formats
+  const rawEventsArray = Array.isArray(rawEvents) ? rawEvents : [];
+  const preprocessedEvents = rawEventsArray.map((event: any) => {
+    const preprocessed = { ...event };
+    
+    // Convert null order_id to undefined
+    if (preprocessed.order_id === null) {
+      preprocessed.order_id = undefined;
+    }
+    
+    // Ensure created_at is in ISO 8601 format
+    if (preprocessed.created_at) {
+      try {
+        const date = new Date(preprocessed.created_at);
+        if (!isNaN(date.getTime())) {
+          preprocessed.created_at = date.toISOString();
+        } else {
+          // Invalid date, use current time as fallback
+          preprocessed.created_at = new Date().toISOString();
+        }
+      } catch (e) {
+        preprocessed.created_at = new Date().toISOString();
+      }
+    } else {
+      // If created_at is missing, use current time
+      preprocessed.created_at = new Date().toISOString();
+    }
+    
+    return preprocessed;
+  });
+  
+  // Use safeParse to handle validation errors gracefully
+  const parseResult = z.array(pointsEventSchema).safeParse(preprocessedEvents);
+  
+  if (!parseResult.success) {
+    console.error('[processPointsEvents] Validation errors:', JSON.stringify(parseResult.error.errors, null, 2));
+    // Return detailed error information
+    throw new Error(`Validation failed: ${JSON.stringify(parseResult.error.errors)}`);
+  }
+  
+  const events = parseResult.data;
   const tenantId = getTenantId(workspaceId);
   
   // Ensure tenant exists before processing events
