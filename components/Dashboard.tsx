@@ -99,6 +99,7 @@ const Dashboard: React.FC = () => {
   const [isWhatsappLoading, setIsWhatsappLoading] = useState(false);
   const [previewContent, setPreviewContent] = useState('');
   const [previewType, setPreviewType] = useState<'FIRST' | 'FINAL' | null>(null);
+  const [isSyncingFromWordPress, setIsSyncingFromWordPress] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -513,6 +514,27 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleSyncFromWordPress = async () => {
+    setIsSyncingFromWordPress(true);
+    setError(null);
+    try {
+      const response = await apiFetch<{ success: boolean; message: string; created: number; updated: number; total: number }>('/api/subscribers/sync-from-artly', {
+        method: 'POST',
+      });
+      
+      setSuccessMessage(response.message || `Synced ${response.created} new and ${response.updated} existing subscribers from WordPress.`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+      
+      // Refresh subscribers list
+      await refreshSubscribersAndStats();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to sync subscribers from WordPress. Make sure you have synced customers from WordPress first.');
+    } finally {
+      setIsSyncingFromWordPress(false);
+    }
+  };
+
   const handleSendReminder = async (task: ReminderTask) => {
     setSendingTaskId(task.id);
     setError(null);
@@ -757,6 +779,8 @@ const Dashboard: React.FC = () => {
             reminderConfig={reminderConfig}
             onAdd={openAddModal}
             onImport={() => setShowImportModal(true)}
+            onSyncFromWordPress={handleSyncFromWordPress}
+            isSyncingFromWordPress={isSyncingFromWordPress}
             onEdit={openEditModal}
             onDelete={handleDeleteSub}
             total={subscribersTotal}
@@ -1031,6 +1055,8 @@ const SubscribersTab = ({
   reminderConfig,
   onAdd,
   onImport,
+  onSyncFromWordPress,
+  isSyncingFromWordPress,
   onEdit,
   onDelete,
   total,
@@ -1039,6 +1065,8 @@ const SubscribersTab = ({
   reminderConfig: ReminderConfig;
   onAdd: () => void;
   onImport: () => void;
+  onSyncFromWordPress: () => void;
+  isSyncingFromWordPress: boolean;
   onEdit: (sub: Subscriber) => void;
   onDelete: (id: string) => void;
   total: number;
@@ -1047,6 +1075,21 @@ const SubscribersTab = ({
     <div className="flex justify-between items-center mb-8">
       <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Subscribers ({total})</h1>
       <div className="flex gap-3">
+        <button 
+          onClick={onSyncFromWordPress} 
+          disabled={isSyncingFromWordPress}
+          className="bg-primary text-white px-6 py-3 rounded-xl hover:bg-indigo-600 shadow-lg shadow-primary/30 flex items-center gap-2 font-bold transition-all transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+        >
+          {isSyncingFromWordPress ? (
+            <>
+              <i className="fas fa-spinner fa-spin"></i> Syncing...
+            </>
+          ) : (
+            <>
+              <i className="fas fa-sync-alt"></i> Sync from WordPress
+            </>
+          )}
+        </button>
         <button onClick={onAdd} className="bg-white border border-gray-200 text-gray-700 px-6 py-3 rounded-xl hover:bg-gray-50 shadow-sm flex items-center gap-2 font-bold transition-all">
           <i className="fas fa-plus"></i> Add Manually
         </button>
