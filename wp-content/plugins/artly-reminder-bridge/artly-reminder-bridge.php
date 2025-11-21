@@ -507,26 +507,6 @@ add_action( 'wp_ajax_artly_start_sync_points', 'artly_start_sync_points' );
 function artly_start_sync_points() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
   
-  // Send response immediately so client can start polling
-  if ( function_exists( 'fastcgi_finish_request' ) ) {
-    fastcgi_finish_request();
-  } else {
-    // For non-FastCGI, send headers and flush output
-    if ( ! headers_sent() ) {
-      header( 'Content-Type: application/json' );
-      header( 'Content-Length: 0' );
-      header( 'Connection: close' );
-    }
-    if ( ob_get_level() ) {
-      ob_end_flush();
-    }
-    flush();
-  }
-  
-  // Run sync in background (after response sent)
-  ignore_user_abort( true );
-  set_time_limit( 300 ); // 5 minutes
-  
   // Initialize progress before starting
   global $wpdb;
   $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
@@ -549,11 +529,25 @@ function artly_start_sync_points() {
     'message' => 'Starting sync...',
   ) );
   
+  // Send response immediately so client can start polling
+  wp_send_json_success( array( 'started' => true, 'total' => $total_count ) );
+  
+  // Run sync in background (after response sent)
+  if ( function_exists( 'fastcgi_finish_request' ) ) {
+    fastcgi_finish_request();
+  } else {
+    // For non-FastCGI, flush output
+    if ( ob_get_level() ) {
+      ob_end_flush();
+    }
+    flush();
+  }
+  
+  ignore_user_abort( true );
+  set_time_limit( 300 ); // 5 minutes
+  
   // Run the sync
   artly_sync_points_from_woo();
-  
-  // This won't be sent to client, but ensures script completes
-  wp_send_json_success( array( 'started' => true ) );
 }
 
 add_action( 'wp_ajax_artly_get_points_count', 'artly_get_points_count' );
