@@ -469,19 +469,59 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
 
 const chargeSchema = z.object({
   external_charge_id: z.union([z.string(), z.number()]),
-  wp_user_id: z.number().int().optional(),
+  wp_user_id: z.number().int().optional().nullable().transform(val => val === null ? undefined : val),
   email: z.string().email().optional(),
   order_id: z.string().optional(),
   amount: z.number(),
   currency: z.string().default('EGP'),
   status: z.string(),
   payment_method: z.string().optional(),
-  created_at: z.string().datetime(),
+  created_at: z.string().datetime().or(z.string().transform((val) => {
+    // Try to parse and reformat if not already in ISO format
+    try {
+      const date = new Date(val);
+      if (isNaN(date.getTime())) {
+        return new Date().toISOString();
+      }
+      return date.toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  })),
 });
 
 export const processCharges = async (rawCharges: unknown, workspaceId?: string | null) => {
-  const charges = z.array(chargeSchema).parse(rawCharges);
+  // Preprocess charges to handle invalid datetime formats
+  const preprocessedCharges = (Array.isArray(rawCharges) ? rawCharges : []).map((data: any) => {
+    // Ensure created_at is in ISO 8601 format
+    if (data.created_at) {
+      try {
+        const date = new Date(data.created_at);
+        if (isNaN(date.getTime())) {
+          data.created_at = new Date().toISOString();
+        } else {
+          data.created_at = date.toISOString();
+        }
+      } catch (e) {
+        data.created_at = new Date().toISOString();
+      }
+    } else {
+      data.created_at = new Date().toISOString();
+    }
+    
+    // Handle null wp_user_id
+    if (data.wp_user_id === null) {
+      data.wp_user_id = undefined;
+    }
+    
+    return data;
+  });
+
+  const charges = z.array(chargeSchema).parse(preprocessedCharges);
   const tenantId = getTenantId(workspaceId);
+  
+  console.log('[processCharges] Starting charges sync...');
+  console.log('[processCharges] Parsed', charges.length, 'charges for tenant:', tenantId);
   
   // Ensure tenant exists before processing charges
   await prisma.tenant.upsert({
@@ -495,8 +535,11 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
   });
   
   let upserted = 0;
+  let errors: string[] = [];
 
-  for (const charge of charges) {
+  for (let i = 0; i < charges.length; i++) {
+    const charge = charges[i];
+    try {
     // Create or update customer if we have user info
     const customer = charge.wp_user_id && charge.email
       ? await prisma.customer.upsert({
@@ -534,9 +577,25 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
     }
 
     upserted += 1;
+    
+    // Log progress every 50 records
+    if (upserted % 50 === 0) {
+      console.log(`[processCharges] Processed ${upserted}/${charges.length} charges...`);
+    }
+    } catch (error: any) {
+      const errorMsg = `Error processing charge ${charge.external_charge_id}: ${error.message}`;
+      console.error('[processCharges]', errorMsg);
+      errors.push(errorMsg);
+    }
   }
 
-  return { upserted };
+  console.log(`[processCharges] Completed: ${upserted} charges processed, ${errors.length} errors`);
+  
+  if (errors.length > 0) {
+    console.error('[processCharges] Errors:', errors.slice(0, 10)); // Log first 10 errors
+  }
+
+  return { upserted, errors: errors.length > 0 ? errors.slice(0, 10) : undefined };
 };
 
 

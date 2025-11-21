@@ -604,55 +604,172 @@ function artly_sync_charges_from_woo(): array {
     return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
 
+  // Clear any previous cancel flag
+  delete_option( ARB_SYNC_CANCEL_FLAG );
+  
+  // Initialize progress
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'charges',
+    'status' => 'running',
+    'total' => 0,
+    'processed' => 0,
+    'imported' => 0,
+    'message' => 'Fetching orders from WooCommerce...',
+    'start_time' => current_time( 'mysql', true ),
+    'end_time' => null,
+  ) );
+
+  // Get all orders (no limit, we'll process in batches)
   $orders = wc_get_orders(
     array(
-      'limit'  => 1000,
+      'limit'  => -1, // Get all orders
       'status' => array( 'processing', 'completed', 'on-hold' ),
       'orderby' => 'date',
       'order'   => 'DESC',
+      'return' => 'ids', // Get only IDs for better performance
     )
   );
 
-  $payload = array();
+  if ( empty( $orders ) ) {
+    $msg = 'No orders found to sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'charges',
+      'status' => 'completed',
+      'total' => 0,
+      'processed' => 0,
+      'imported' => 0,
+      'message' => $msg,
+      'start_time' => current_time( 'mysql', true ),
+      'end_time' => current_time( 'mysql', true ),
+    ) );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => true, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => 0 );
+  }
 
-  foreach ( $orders as $order ) {
-    $user_id = $order->get_user_id();
-    if ( ! $user_id ) {
+  $total_orders = count( $orders );
+  $total_upserted = 0;
+  $batch_size = 50; // Process in batches of 50 to prevent timeouts
+
+  // Update progress with total
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'charges',
+    'status' => 'running',
+    'total' => $total_orders,
+    'processed' => 0,
+    'imported' => 0,
+    'message' => sprintf( 'Processing %d orders...', $total_orders ),
+    'start_time' => current_time( 'mysql', true ),
+    'end_time' => null,
+  ) );
+
+  // Process orders in batches
+  $batches = array_chunk( $orders, $batch_size );
+  $batch_number = 0;
+
+  foreach ( $batches as $batch ) {
+    // Check for cancellation
+    if ( get_option( ARB_SYNC_CANCEL_FLAG, false ) ) {
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'charges',
+        'status' => 'cancelled',
+        'total' => $total_orders,
+        'processed' => $total_upserted,
+        'imported' => $total_upserted,
+        'message' => 'Sync cancelled by user.',
+        'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+        'end_time' => current_time( 'mysql', true ),
+      ) );
+      delete_option( ARB_SYNC_CANCEL_FLAG );
+      return array( 'success' => false, 'message' => 'Sync cancelled by user.', 'count' => $total_upserted );
+    }
+
+    $batch_number++;
+    $payload = array();
+
+    foreach ( $batch as $order_id ) {
+      $order = wc_get_order( $order_id );
+      if ( ! $order ) {
+        continue;
+      }
+
+      $user_id = $order->get_user_id();
+      if ( ! $user_id ) {
+        continue;
+      }
+
+      $date_created = $order->get_date_created();
+      $created_at = $date_created ? gmdate( 'c', $date_created->getTimestamp() ) : gmdate( 'c' );
+
+      $payload[] = array(
+        'external_charge_id' => (string) $order->get_id(),
+        'wp_user_id'         => $user_id > 0 ? $user_id : null,
+        'email'              => $order->get_billing_email(),
+        'order_id'           => (string) $order->get_id(),
+        'amount'             => (float) $order->get_total(),
+        'currency'           => $order->get_currency(),
+        'status'             => $order->get_status(),
+        'payment_method'     => $order->get_payment_method(),
+        'created_at'         => $created_at,
+      );
+    }
+
+    if ( empty( $payload ) ) {
       continue;
     }
-    $user = get_userdata( $user_id );
-    $payload[] = array(
-      'external_charge_id' => (string) $order->get_id(),
-      'wp_user_id'         => $user_id > 0 ? $user_id : null,
-      'email'              => $order->get_billing_email(),
-      'order_id'           => (string) $order->get_id(),
-      'amount'             => (float) $order->get_total(),
-      'currency'           => $order->get_currency(),
-      'status'             => $order->get_status(),
-      'payment_method'     => $order->get_payment_method(),
-      'created_at'         => gmdate( 'c', $order->get_date_created()->getTimestamp() ),
-    );
+
+    // Send batch to API
+    $result = artly_reminder_bridge_post_to_api( 'artly/sync/charges', $payload );
+    
+    if ( null === $result ) {
+      $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during charge sync' );
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'charges',
+        'status' => 'error',
+        'total' => $total_orders,
+        'processed' => $total_upserted,
+        'imported' => $total_upserted,
+        'message' => sprintf( 'Error: %s', $error ),
+        'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+        'end_time' => current_time( 'mysql', true ),
+      ) );
+      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $error, 'count' => $total_upserted ) );
+      return array( 'success' => false, 'message' => $error, 'count' => $total_upserted );
+    }
+
+    $batch_upserted = (int) ( $result['upserted'] ?? count( $payload ) );
+    $total_upserted += $batch_upserted;
+
+    // Update progress
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'charges',
+      'status' => 'running',
+      'total' => $total_orders,
+      'processed' => $total_upserted,
+      'imported' => $total_upserted,
+      'message' => sprintf( 'Processing batch %d/%d: %d/%d orders synced...', $batch_number, count( $batches ), $total_upserted, $total_orders ),
+      'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+      'end_time' => null,
+    ) );
   }
 
-  if ( empty( $payload ) ) {
-    $msg = 'No charges to sync.';
-    artly_reminder_bridge_log( $msg );
-    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $msg, 'count' => 0 ) );
-    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
-  }
-
-  $result = artly_reminder_bridge_post_to_api( 'artly/sync/charges', $payload );
-  if ( null !== $result ) {
-    $upserted = (int) ( $result['upserted'] ?? count( $payload ) );
-    $msg = sprintf( 'Successfully synced %d charges', $upserted );
-    artly_reminder_bridge_log( $msg );
-    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) ) );
-    return array( 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) );
-  }
+  // Finalize progress
+  $msg = sprintf( 'Successfully synced %d charges', $total_upserted );
+  artly_reminder_bridge_log( $msg );
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'charges',
+    'status' => 'completed',
+    'total' => $total_orders,
+    'processed' => $total_upserted,
+    'imported' => $total_upserted,
+    'message' => $msg,
+    'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+    'end_time' => current_time( 'mysql', true ),
+  ) );
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_orders ) );
+  update_option( ARB_LAST_SYNC_TIME_OPTION, current_time( 'mysql', true ) );
   
-  $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
-  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'charges', 'success' => false, 'message' => $error, 'count' => 0 ) );
-  return array( 'success' => false, 'message' => $error, 'count' => 0 );
+  return array( 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_orders );
 }
 
 add_action( 'admin_menu', 'artly_reminder_bridge_admin_menu' );
@@ -684,6 +801,39 @@ function artly_start_sync_points() {
   // Run balance sync (not events sync)
   $result = artly_sync_points_balances_from_woo();
   wp_send_json_success( $result );
+}
+
+add_action( 'wp_ajax_artly_start_sync_charges', 'artly_start_sync_charges' );
+function artly_start_sync_charges() {
+  check_ajax_referer( 'artly_sync_charges', '_wpnonce' );
+  
+  // Clear any previous progress
+  delete_option( ARB_SYNC_PROGRESS_OPTION );
+  
+  // Run charges sync
+  $result = artly_sync_charges_from_woo();
+  wp_send_json_success( $result );
+}
+
+add_action( 'wp_ajax_artly_get_charges_count', 'artly_get_charges_count' );
+function artly_get_charges_count() {
+  check_ajax_referer( 'artly_sync_charges', '_wpnonce' );
+  
+  if ( ! class_exists( 'WooCommerce' ) ) {
+    wp_send_json_success( array( 'total' => 0 ) );
+    return;
+  }
+  
+  $orders = wc_get_orders(
+    array(
+      'limit'  => -1,
+      'status' => array( 'processing', 'completed', 'on-hold' ),
+      'return' => 'ids',
+    )
+  );
+  
+  $total = count( $orders );
+  wp_send_json_success( array( 'total' => $total ) );
 }
 
 add_action( 'wp_ajax_artly_get_points_count', 'artly_get_points_count' );
@@ -793,13 +943,8 @@ function artly_reminder_bridge_handle_post(): ?string {
     return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
   }
 
-  if ( isset( $_POST['artly_sync_charges'] ) ) {
-    $result = artly_sync_charges_from_woo();
-    if ( $result['success'] ) {
-      return '<span style="color: green;">✅ ' . esc_html( $result['message'] ) . ' (' . $result['count'] . ' of ' . $result['total'] . ' charges)</span>';
-    }
-    return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
-  }
+  // Charges sync is now handled via AJAX (artly_start_sync_charges)
+  // Removed old form submission handler
 
   return __( 'Settings saved.', 'artly-reminder-bridge' );
 }
@@ -969,9 +1114,45 @@ function artly_reminder_bridge_render_admin_page(): void {
         }
         </style>
         <p>
-          <button type="submit" name="artly_sync_charges" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
-          <span class="description"><?php esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine', 'artly-reminder-bridge' ); ?></span>
+          <button type="button" class="button button-secondary" id="artly-sync-charges-btn"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
+          <button type="button" class="button" id="artly-cancel-charges-sync-btn" style="display: none; margin-left: 10px; background: #dc3232; color: white; border-color: #dc3232;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+          <span class="description" id="artly-charges-description">
+            <?php 
+            $total_orders = 0;
+            if ( class_exists( 'WooCommerce' ) ) {
+              $orders = wc_get_orders(
+                array(
+                  'limit'  => -1,
+                  'status' => array( 'processing', 'completed', 'on-hold' ),
+                  'return' => 'ids',
+                )
+              );
+              $total_orders = count( $orders );
+            }
+            esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine.', 'artly-reminder-bridge' );
+            if ( $total_orders > 0 ) {
+              echo ' (' . esc_html( number_format( $total_orders ) ) . ' orders)';
+            }
+            ?>
+          </span>
         </p>
+        <div id="artly-charges-sync-progress" style="display: none; margin-top: 10px; padding: 15px; background: #f9f9f9; border-left: 4px solid #2271b1; max-width: 700px; border-radius: 4px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <p style="margin: 0; font-weight: bold; color: #2271b1;">
+              <i class="dashicons dashicons-update" style="animation: spin 1s linear infinite; display: inline-block; margin-right: 5px;"></i>
+              <?php esc_html_e( 'Charges Sync Progress', 'artly-reminder-bridge' ); ?>
+            </p>
+          </div>
+          <div id="artly-charges-progress-message" style="margin-bottom: 10px; color: #333; font-size: 14px;"></div>
+          <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; height: 24px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
+            <div id="artly-charges-progress-bar" style="background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+              <span id="artly-charges-progress-percentage">0%</span>
+            </div>
+          </div>
+          <p id="artly-charges-progress-stats" style="margin: 10px 0 0 0; font-size: 13px; color: #666; line-height: 1.6;">
+            <span id="artly-charges-progress-details"></span>
+          </p>
+        </div>
       </form>
     </div>
   </div>
@@ -1324,6 +1505,362 @@ function artly_reminder_bridge_render_admin_page(): void {
 
     // Check for existing sync on page load
     updateProgress();
+  })();
+
+  // Charges sync progress tracking
+  (function() {
+    const chargesSyncBtn = document.getElementById('artly-sync-charges-btn');
+    const chargesCancelBtn = document.getElementById('artly-cancel-charges-sync-btn');
+    const chargesProgressDiv = document.getElementById('artly-charges-sync-progress');
+    const chargesProgressMessage = document.getElementById('artly-charges-progress-message');
+    const chargesProgressBar = document.getElementById('artly-charges-progress-bar');
+    const chargesProgressPercentage = document.getElementById('artly-charges-progress-percentage');
+    const chargesProgressDetails = document.getElementById('artly-charges-progress-details');
+    const chargesDescription = document.getElementById('artly-charges-description');
+    let chargesProgressInterval = null;
+    let chargesTotalToSync = 0;
+    let chargesIsCancelled = false;
+
+    function formatNumber(num) {
+      return new Intl.NumberFormat().format(num);
+    }
+
+    function updateChargesProgress() {
+      fetch(ajaxurl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          action: 'artly_get_sync_progress',
+          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_progress' ); ?>',
+        }),
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.data && data.data.type === 'charges') {
+          const progress = data.data;
+          
+          if (progress.status === 'running') {
+            chargesProgressDiv.style.display = 'block';
+            chargesProgressMessage.textContent = progress.message || 'Syncing charges...';
+            
+            const percentage = progress.total > 0 
+              ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
+              : 0;
+            
+            chargesProgressBar.style.width = percentage + '%';
+            chargesProgressPercentage.textContent = percentage + '%';
+            
+            const processed = formatNumber(progress.processed);
+            const total = formatNumber(progress.total);
+            const imported = formatNumber(progress.imported);
+            
+            chargesProgressDetails.innerHTML = `
+              <strong>Processed:</strong> ${processed} / ${total} orders<br>
+              <strong>Synced:</strong> ${imported} charges<br>
+              <strong>Progress:</strong> ${percentage}% complete
+            `;
+            
+            if (chargesProgressInterval) {
+              clearTimeout(chargesProgressInterval);
+            }
+            chargesProgressInterval = setTimeout(updateChargesProgress, 800);
+          } else if (progress.status === 'completed') {
+            chargesProgressDiv.style.display = 'block';
+            chargesProgressMessage.textContent = progress.message || '✅ Sync completed successfully!';
+            chargesProgressBar.style.width = '100%';
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+            chargesProgressPercentage.textContent = '100%';
+            
+            const processed = formatNumber(progress.processed);
+            const imported = formatNumber(progress.imported);
+            
+            chargesProgressDetails.innerHTML = `
+              <strong style="color: #46b450;">✓ Completed!</strong><br>
+              <strong>Total processed:</strong> ${processed} orders<br>
+              <strong>Total synced:</strong> ${imported} charges
+            `;
+            
+            if (chargesSyncBtn) {
+              chargesSyncBtn.disabled = false;
+              chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+            }
+            if (chargesCancelBtn) {
+              chargesCancelBtn.style.display = 'none';
+            }
+            
+            if (chargesProgressInterval) {
+              clearTimeout(chargesProgressInterval);
+            }
+            
+            setTimeout(() => {
+              chargesProgressDiv.style.display = 'none';
+              location.reload();
+            }, 2000);
+          } else if (progress.status === 'error') {
+            chargesProgressDiv.style.display = 'block';
+            chargesProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+            
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            
+            chargesProgressDetails.innerHTML = `
+              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} orders
+            `;
+            
+            if (chargesSyncBtn) {
+              chargesSyncBtn.disabled = false;
+              chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+            }
+            if (chargesCancelBtn) {
+              chargesCancelBtn.style.display = 'none';
+            }
+            
+            if (chargesProgressInterval) {
+              clearTimeout(chargesProgressInterval);
+            }
+          } else if (progress.status === 'cancelled') {
+            chargesProgressDiv.style.display = 'block';
+            chargesProgressMessage.textContent = '⚠️ Sync cancelled by user.';
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+            
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            
+            chargesProgressDetails.innerHTML = `
+              <strong style="color: #d97706;">✗ Cancelled</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} orders
+            `;
+            
+            if (chargesSyncBtn) {
+              chargesSyncBtn.disabled = false;
+              chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+            }
+            if (chargesCancelBtn) {
+              chargesCancelBtn.style.display = 'none';
+            }
+            
+            if (chargesProgressInterval) {
+              clearTimeout(chargesProgressInterval);
+            }
+          }
+        } else {
+          // No active charges sync
+          if (chargesProgressInterval) {
+            clearTimeout(chargesProgressInterval);
+          }
+        }
+      })
+      .catch(error => {
+        console.error('Error fetching charges progress:', error);
+        if (chargesProgressInterval) {
+          clearTimeout(chargesProgressInterval);
+        }
+      });
+    }
+
+    if (chargesSyncBtn) {
+      chargesSyncBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        chargesIsCancelled = false;
+        
+        // Get total count first
+        fetch(ajaxurl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            action: 'artly_get_charges_count',
+            _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_charges' ); ?>',
+          }),
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success && data.data) {
+            chargesTotalToSync = data.data.total;
+            
+            // Update description
+            if (chargesDescription) {
+              chargesDescription.innerHTML = '<?php esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine.', 'artly-reminder-bridge' ); ?> (' + formatNumber(chargesTotalToSync) + ' orders)';
+            }
+
+            // Show progress immediately
+            chargesProgressDiv.style.display = 'block';
+            chargesProgressMessage.textContent = 'Initializing charges sync...';
+            chargesProgressBar.style.width = '0%';
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+            chargesProgressPercentage.textContent = '0%';
+            chargesProgressDetails.innerHTML = `
+              <strong>Total to sync:</strong> ${formatNumber(chargesTotalToSync)} orders<br>
+              <strong>Status:</strong> Starting...
+            `;
+            
+            // Disable sync button and show cancel button
+            chargesSyncBtn.disabled = true;
+            chargesSyncBtn.textContent = 'Syncing...';
+            if (chargesCancelBtn) {
+              chargesCancelBtn.style.display = 'inline-block';
+            }
+            
+            // Start the sync via AJAX
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_start_sync_charges',
+                _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_charges' ); ?>',
+              }),
+            })
+            .then(response => response.json())
+            .then(data => {
+              if (chargesIsCancelled) {
+                chargesProgressMessage.textContent = '⚠️ Sync was cancelled.';
+                chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                return;
+              }
+              
+              if (data.success) {
+                // Start polling for progress
+                updateChargesProgress();
+              } else {
+                chargesProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+                
+                if (chargesSyncBtn) {
+                  chargesSyncBtn.disabled = false;
+                  chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+                }
+                if (chargesCancelBtn) {
+                  chargesCancelBtn.style.display = 'none';
+                }
+              }
+            })
+            .catch(error => {
+              console.error('Error during charges sync:', error);
+              chargesProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
+              chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+              chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
+              
+              if (chargesSyncBtn) {
+                chargesSyncBtn.disabled = false;
+                chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+              }
+              if (chargesCancelBtn) {
+                chargesCancelBtn.style.display = 'none';
+              }
+            });
+          }
+        })
+        .catch(error => {
+          console.error('Error getting charges count:', error);
+          // Still try to start sync
+          chargesProgressDiv.style.display = 'block';
+          chargesProgressMessage.textContent = 'Starting sync...';
+          chargesSyncBtn.disabled = true;
+          chargesSyncBtn.textContent = 'Syncing...';
+          if (chargesCancelBtn) {
+            chargesCancelBtn.style.display = 'inline-block';
+          }
+          chargesIsCancelled = false;
+          
+          fetch(ajaxurl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              action: 'artly_start_sync_charges',
+              _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_charges' ); ?>',
+            }),
+          })
+          .then(response => response.json())
+          .then(data => {
+            if (chargesIsCancelled) {
+              chargesProgressMessage.textContent = '⚠️ Sync was cancelled.';
+              chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+              return;
+            }
+            
+            if (data.success) {
+              updateChargesProgress();
+            } else {
+              chargesProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+              chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+              chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+              
+              if (chargesSyncBtn) {
+                chargesSyncBtn.disabled = false;
+                chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+              }
+              if (chargesCancelBtn) {
+                chargesCancelBtn.style.display = 'none';
+              }
+            }
+          })
+          .catch(error => {
+            console.error('Error during charges sync:', error);
+            chargesProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+            chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
+            
+            if (chargesSyncBtn) {
+              chargesSyncBtn.disabled = false;
+              chargesSyncBtn.textContent = '<?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?>';
+            }
+            if (chargesCancelBtn) {
+              chargesCancelBtn.style.display = 'none';
+            }
+          });
+        });
+      });
+
+      if (chargesCancelBtn) {
+        chargesCancelBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          if (confirm('Are you sure you want to cancel the sync?')) {
+            chargesIsCancelled = true;
+            chargesProgressMessage.textContent = 'Cancelling sync...';
+            chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+            chargesSyncBtn.disabled = true;
+            chargesCancelBtn.disabled = true;
+            
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_cancel_sync',
+                _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_charges' ); ?>',
+              }),
+            })
+            .then(response => response.json())
+            .then(data => {
+              console.log('Cancel response:', data);
+            })
+            .catch(error => {
+              console.error('Error sending cancel request:', error);
+              chargesProgressMessage.textContent = '❌ Error requesting cancellation.';
+              chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+            })
+            .finally(() => {
+              chargesCancelBtn.disabled = false;
+            });
+          }
+        });
+      }
+
+      // Initial check for ongoing sync when page loads
+      updateChargesProgress();
+    }
   })();
   </script>
   <?php
