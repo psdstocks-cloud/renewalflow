@@ -287,9 +287,9 @@ export const processSubscriptions = async (rawSubscriptions: unknown, workspaceI
 
 const userSchema = z.object({
   wp_user_id: z.number().int(),
-  email: z.string().email().or(z.string().min(1)), // Allow non-email strings but log them
-  first_name: z.string().optional().nullable(),
-  last_name: z.string().optional().nullable(),
+  email: z.string().min(1), // Accept any non-empty string, validate email format later
+  first_name: z.string().nullable().optional(),
+  last_name: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   whatsapp: z.string().nullable().optional(),
   locale: z.string().nullable().optional(),
