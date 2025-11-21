@@ -110,3 +110,111 @@ export async function subscriberStats(referenceDate: Date, expiringThresholdDays
     expiringSoon
   };
 }
+
+/**
+ * Sync Customers from Artly integration to Subscriber records
+ * This converts Customer records (from WordPress sync) into Subscriber records (for frontend display)
+ */
+export async function syncCustomersToSubscribers(workspaceId: string) {
+  const tenantId = workspaceId; // tenantId = workspaceId for Artly integration
+  
+  // Get all customers for this workspace/tenant
+  const customers = await prisma.customer.findMany({
+    where: { tenantId },
+    include: {
+      subscriptions: {
+        where: {
+          status: {
+            in: ['active', 'trialing', 'pending']
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 1 // Get the most recent active subscription
+      },
+      walletSnapshots: {
+        take: 1
+      }
+    }
+  });
+
+  let created = 0;
+  let updated = 0;
+  const wsId = workspaceId || await getDefaultWorkspaceId();
+
+  for (const customer of customers) {
+    // Get the most recent active subscription or use defaults
+    const subscription = customer.subscriptions[0];
+    
+    // Get points balance
+    const walletSnapshot = customer.walletSnapshots[0];
+    const pointsRemaining = walletSnapshot?.pointsBalance ?? 0;
+
+    // Determine subscriber status from subscription
+    let status = 'ACTIVE';
+    let startDate = new Date();
+    let endDate = addDays(new Date(), 30); // Default 30 days
+    let planName = 'Default Plan';
+    let amount = 0;
+    let currency = 'EGP';
+
+    if (subscription) {
+      // Map subscription status to subscriber status
+      if (subscription.status === 'active' || subscription.status === 'trialing') {
+        status = 'ACTIVE';
+      } else if (subscription.status === 'cancelled' || subscription.status === 'expired') {
+        status = 'EXPIRED';
+      } else {
+        status = 'ACTIVE';
+      }
+
+      planName = subscription.planName || 'Subscription Plan';
+      
+      // Use subscription dates if available
+      if (subscription.currentPeriodEnd) {
+        endDate = subscription.currentPeriodEnd;
+      }
+      if (subscription.nextPaymentDate) {
+        startDate = subscription.nextPaymentDate;
+      }
+    }
+
+    // Create name from email (or use email as name)
+    const name = customer.email.split('@')[0] || customer.email;
+
+    // Check if subscriber already exists by email
+    const existing = await prisma.subscriber.findUnique({ 
+      where: { email: customer.email } 
+    });
+
+    const subscriberData = {
+      name,
+      email: customer.email,
+      phone: customer.phone || undefined,
+      planName,
+      amount,
+      currency,
+      pointsRemaining,
+      status,
+      startDate,
+      endDate,
+      paymentLink: undefined
+    };
+
+    if (existing) {
+      // Update existing subscriber
+      await prisma.subscriber.update({
+        where: { id: existing.id },
+        data: { ...subscriberData, workspaceId: wsId }
+      });
+      updated += 1;
+    } else {
+      // Create new subscriber
+      await prisma.subscriber.create({
+        data: { ...subscriberData, workspaceId: wsId }
+      });
+      created += 1;
+    }
+  }
+
+  return { created, updated, total: customers.length };
+}

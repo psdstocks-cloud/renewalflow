@@ -7,6 +7,7 @@ import {
   importSubscribers,
   listSubscribers,
   subscriberStats,
+  syncCustomersToSubscribers,
   updateSubscriber
 } from '../services/subscriberService';
 import { z } from 'zod';
@@ -86,6 +87,34 @@ subscriberRouter.post('/api/subscribers/import', async (req, res, next) => {
     const { subscribers } = schema.parse(req.body);
     const summary = await importSubscribers(subscribers as any);
     res.json(summary);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Sync Customers from Artly integration to Subscribers
+subscriberRouter.post('/api/subscribers/sync-from-artly', async (req, res, next) => {
+  try {
+    // Get workspaceId from authenticated user
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
+
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
+
+    const summary = await syncCustomersToSubscribers(workspaceUser.workspaceId);
+    res.json({
+      success: true,
+      message: `Synced ${summary.created} new and ${summary.updated} existing subscribers from ${summary.total} customers`,
+      ...summary
+    });
   } catch (error) {
     next(error);
   }
