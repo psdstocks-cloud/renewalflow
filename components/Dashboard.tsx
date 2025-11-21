@@ -74,6 +74,8 @@ const Dashboard: React.FC = () => {
   const { signOut } = useAuth();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [subscribersTotal, setSubscribersTotal] = useState(0);
+  const [subscribersPage, setSubscribersPage] = useState(1);
+  const [subscribersPerPage] = useState(50);
   const [subscriberStats, setSubscriberStats] = useState<SubscriberStats | null>(null);
   const [reminderTasks, setReminderTasks] = useState<ReminderTask[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
@@ -216,9 +218,10 @@ const Dashboard: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
+      const skip = (subscribersPage - 1) * subscribersPerPage;
       const [settingsRes, subscriberRes, statsRes, logsRes] = await Promise.all([
         apiFetch<AppSettings>('/api/settings'),
-        apiFetch<SubscribersResponse>('/api/subscribers'),
+        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
         apiFetch<EmailLog[]>('/api/reminders/logs?limit=100'),
       ]);
@@ -246,8 +249,9 @@ const Dashboard: React.FC = () => {
 
   const refreshSubscribersAndStats = async () => {
     try {
+      const skip = (subscribersPage - 1) * subscribersPerPage;
       const [subscriberRes, statsRes] = await Promise.all([
-        apiFetch<SubscribersResponse>('/api/subscribers'),
+        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
       ]);
       setSubscribers(subscriberRes.items);
@@ -256,6 +260,21 @@ const Dashboard: React.FC = () => {
     } catch (err) {
       console.error(err);
       setError('Unable to refresh subscribers.');
+    }
+  };
+
+  const loadSubscribersPage = async (page: number) => {
+    setSubscribersPage(page);
+    try {
+      const skip = (page - 1) * subscribersPerPage;
+      const subscriberRes = await apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`);
+      setSubscribers(subscriberRes.items);
+      setSubscribersTotal(subscriberRes.total);
+      // Scroll to top of table
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      console.error(err);
+      setError('Unable to load subscribers.');
     }
   };
 
@@ -796,6 +815,9 @@ const Dashboard: React.FC = () => {
             onEdit={openEditModal}
             onDelete={handleDeleteSub}
             total={subscribersTotal}
+            currentPage={subscribersPage}
+            perPage={subscribersPerPage}
+            onPageChange={loadSubscribersPage}
           />
         )}
 
@@ -1072,6 +1094,9 @@ const SubscribersTab = ({
   onEdit,
   onDelete,
   total,
+  currentPage,
+  perPage,
+  onPageChange,
 }: {
   subscribers: Subscriber[];
   reminderConfig: ReminderConfig;
@@ -1082,7 +1107,15 @@ const SubscribersTab = ({
   onEdit: (sub: Subscriber) => void;
   onDelete: (id: string) => void;
   total: number;
-}) => (
+  currentPage: number;
+  perPage: number;
+  onPageChange: (page: number) => void;
+}) => {
+  const totalPages = Math.ceil(total / perPage);
+  const startItem = (currentPage - 1) * perPage + 1;
+  const endItem = Math.min(currentPage * perPage, total);
+
+  return (
   <div className="max-w-7xl mx-auto animate-fade-in-up">
     <div className="flex justify-between items-center mb-8">
       <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Subscribers ({total})</h1>
@@ -1189,9 +1222,69 @@ const SubscribersTab = ({
           </tbody>
         </table>
       </div>
+      
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="px-8 py-6 border-t border-gray-100 bg-gray-50/50">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-gray-600">
+              Showing <span className="font-bold text-gray-900">{startItem}</span> to <span className="font-bold text-gray-900">{endItem}</span> of <span className="font-bold text-gray-900">{total}</span> subscribers
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => onPageChange(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-all flex items-center gap-2"
+              >
+                <i className="fas fa-chevron-left"></i>
+                Previous
+              </button>
+              
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalPages <= 7) {
+                    pageNum = i + 1;
+                  } else if (currentPage <= 4) {
+                    pageNum = i + 1;
+                  } else if (currentPage >= totalPages - 3) {
+                    pageNum = totalPages - 6 + i;
+                  } else {
+                    pageNum = currentPage - 3 + i;
+                  }
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => onPageChange(pageNum)}
+                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                        currentPage === pageNum
+                          ? 'bg-primary text-white shadow-md'
+                          : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+              
+              <button
+                onClick={() => onPageChange(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-all flex items-center gap-2"
+              >
+                Next
+                <i className="fas fa-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   </div>
-);
+  );
+};
 const LogsTab = ({ emailLogs, onRefresh }: { emailLogs: EmailLog[]; onRefresh: () => void }) => (
   <div className="max-w-5xl mx-auto animate-fade-in-up">
     <div className="flex items-center justify-between mb-4">
