@@ -76,7 +76,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Register routes - artlyRouter should be early to avoid conflicts
 app.use(healthRouter);
+app.use(artlyRouter); // Move artlyRouter earlier to ensure it's checked first
 app.use(workspaceRouter);
 app.use(websiteConnectionRouter);
 app.use(subscriberRouter);
@@ -84,7 +86,16 @@ app.use(settingsRouter);
 app.use(reminderRouter);
 app.use(wooRouter);
 app.use(cronRouter);
-app.use(artlyRouter);
+
+// Log registered routes for debugging
+console.log('[Routes] Registered artlyRouter');
+console.log('[Routes] Available artly routes: /artly/test, /artly/debug/key-check, /artly/sync/*');
+
+// Add catch-all to see unmatched routes
+app.use((req, res, next) => {
+  console.log(`[Unmatched Route] ${req.method} ${req.path} - No handler found`);
+  res.status(404).json({ message: 'Route not found', path: req.path });
+});
 
 app.use(errorHandler);
 

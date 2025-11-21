@@ -10,11 +10,16 @@ import { prisma } from '../config/db';
 
 export const artlyRouter = Router();
 
+// Log when router is initialized
+console.log('[artlyRouter] Router initialized, registering routes...');
+
 // Simple test endpoint (NO AUTH - to verify requests reach the server)
 artlyRouter.get('/artly/test', async (req, res) => {
+  console.log('[artly/test] ===== ENDPOINT HANDLER CALLED =====');
   console.log('[artly/test] Test endpoint called!');
   console.log('[artly/test] Headers:', req.headers);
-  return res.json({ 
+  console.log('[artly/test] Sending response...');
+  res.json({ 
     message: 'Test endpoint reached successfully!',
     timestamp: new Date().toISOString(),
     headers: {
@@ -22,6 +27,7 @@ artlyRouter.get('/artly/test', async (req, res) => {
       'content-type': req.headers['content-type'],
     }
   });
+  console.log('[artly/test] Response sent');
 });
 
 // Debug endpoint to check API key (NO AUTH - for debugging)
