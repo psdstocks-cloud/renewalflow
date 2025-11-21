@@ -218,10 +218,11 @@ function artly_sync_points_balances_from_woo(): array {
     return array( 'success' => true, 'message' => $msg, 'count' => 0 );
   }
 
-  // Send balances in batches
-  $batch_size = 100;
+  // Send balances in smaller batches to prevent timeouts
+  $batch_size = 50;
   $total_updated = 0;
   $batches = array_chunk( $balances, $batch_size );
+  $total_batches = count( $batches );
 
   foreach ( $batches as $batch ) {
     $result = artly_reminder_bridge_post_balances( $batch );
@@ -666,7 +667,10 @@ add_action( 'wp_ajax_artly_start_sync_points', 'artly_start_sync_points' );
 function artly_start_sync_points() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
   
-  // Run balance sync (fast, no need for background processing)
+  // Clear any previous progress
+  delete_option( ARB_SYNC_PROGRESS_OPTION );
+  
+  // Run balance sync (not events sync)
   $result = artly_sync_points_balances_from_woo();
   wp_send_json_success( $result );
 }
@@ -676,18 +680,20 @@ function artly_get_points_count() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
   global $wpdb;
   
-  $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
-  $total_count = 0;
+  $total_users = 0;
   
   if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
-    $total_count_query = $wpdb->prepare(
-      "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
-      $last_id
-    );
-    $total_count = (int) $wpdb->get_var( $total_count_query );
+    // Count users with points (for balance sync)
+    if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
+      $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+      $total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$table_name}" );
+    } else {
+      $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+      $total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$log_table}" );
+    }
   }
   
-  wp_send_json_success( array( 'total' => $total_count, 'last_id' => $last_id ) );
+  wp_send_json_success( array( 'total' => $total_users, 'type' => 'users' ) );
 }
 function artly_reminder_bridge_admin_menu(): void {
   add_submenu_page(
@@ -1006,8 +1012,8 @@ function artly_reminder_bridge_render_admin_page(): void {
             const imported = formatNumber(progress.imported);
             
             progressDetails.innerHTML = `
-              <strong>Processed:</strong> ${processed} / ${total} events<br>
-              <strong>Imported:</strong> ${imported} events<br>
+              <strong>Processed:</strong> ${processed} / ${total} users<br>
+              <strong>Updated:</strong> ${imported} balances<br>
               <strong>Progress:</strong> ${percentage}% complete
             `;
             
@@ -1028,8 +1034,8 @@ function artly_reminder_bridge_render_admin_page(): void {
             
             progressDetails.innerHTML = `
               <strong style="color: #46b450;">✓ Completed!</strong><br>
-              <strong>Total processed:</strong> ${processed} events<br>
-              <strong>Total imported:</strong> ${imported} events
+              <strong>Total processed:</strong> ${processed} users<br>
+              <strong>Total updated:</strong> ${imported} balances
             `;
             
             if (syncBtn) {
@@ -1057,7 +1063,7 @@ function artly_reminder_bridge_render_admin_page(): void {
             
             progressDetails.innerHTML = `
               <strong style="color: #dc3232;">✗ Error occurred</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} events
+              <strong>Processed:</strong> ${processed} / ${total} users
             `;
             
             if (syncBtn) {
@@ -1120,17 +1126,17 @@ function artly_reminder_bridge_render_admin_page(): void {
         .then(response => response.json())
         .then(data => {
           if (data.success && data.data) {
-            totalToSync = data.data.total;
+            totalToSync = data.data.total || 0;
             
             // Show progress immediately
             progressDiv.style.display = 'block';
-            progressMessage.textContent = 'Initializing sync...';
+            progressMessage.textContent = 'Initializing balance sync...';
             progressBar.style.width = '0%';
             progressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
             progressPercentage.textContent = '0%';
             progressDetails.innerHTML = `
-              <strong>Total to sync:</strong> ${formatNumber(totalToSync)} events<br>
-              <strong>Status:</strong> Starting...
+              <strong>Total users to sync:</strong> ${formatNumber(totalToSync)} users<br>
+              <strong>Status:</strong> Starting balance sync...
             `;
             
             // Disable sync button and show cancel button
@@ -1168,7 +1174,7 @@ function artly_reminder_bridge_render_admin_page(): void {
                 progressBar.style.width = '100%';
                 progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
                 progressPercentage.textContent = '100%';
-                progressDetails.innerHTML = `<strong style="color: #46b450;">✓ Completed!</strong><br><strong>Updated:</strong> ${formatNumber(data.data.count || 0)} balances`;
+                progressDetails.innerHTML = `<strong style="color: #46b450;">✓ Completed!</strong><br><strong>Updated:</strong> ${formatNumber(data.data.count || 0)} user balances`;
                 
                 setTimeout(() => {
                   location.reload();
