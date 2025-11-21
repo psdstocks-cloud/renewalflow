@@ -12,6 +12,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { artlyRouter } from './routes/artly';
 import { websiteConnectionRouter } from './routes/websiteConnections';
 import { startCronJobs } from './services/cronScheduler';
+import { checkDatabaseConnection } from './config/db';
 
 const app = express();
 
@@ -102,8 +103,17 @@ app.use(errorHandler);
 const port = env.PORT || 4000;
 const host = process.env.HOST || '0.0.0.0';
 
-app.listen(port, host, () => {
+app.listen(port, host, async () => {
   console.log(`RenewalFlow API listening on ${host}:${port}`);
+  
+  // Check database connection on startup
+  const dbConnected = await checkDatabaseConnection();
+  if (!dbConnected) {
+    console.error('[Startup] ⚠️  WARNING: Database connection failed on startup!');
+    console.error('[Startup] The server will start but API requests may fail.');
+    console.error('[Startup] Please check your DATABASE_URL in Railway environment variables.');
+    console.error('[Startup] See FIX_RAILWAY_DATABASE_CONNECTION.md for instructions.');
+  }
 });
 
 startCronJobs();
