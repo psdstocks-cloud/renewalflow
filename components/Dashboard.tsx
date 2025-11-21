@@ -122,6 +122,12 @@ const Dashboard: React.FC = () => {
     loadReminderTasks();
   }, []);
 
+  useEffect(() => {
+    if (activeTab === 'subscribers') {
+      loadSubscribersPage(subscribersPage);
+    }
+  }, [subscribersPage, activeTab]);
+
   const loadWebsiteConnections = async () => {
     setIsLoadingConnections(true);
     try {
