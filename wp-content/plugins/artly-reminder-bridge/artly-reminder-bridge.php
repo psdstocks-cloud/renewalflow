@@ -212,12 +212,47 @@ function artly_sync_points_from_woo(): array {
 }
 
 function artly_sync_users_from_woo(): array {
-  $batch_size = 100; // Process users in batches of 100
+  // First, count total users to determine batch size
+  $total_user_count = count_users();
+  $total_users = (int) $total_user_count['total_users'];
+  
+  artly_reminder_bridge_log( sprintf( 'Starting user sync. Total users: %d', $total_users ) );
+  
+  if ( $total_users === 0 ) {
+    $msg = 'No users to sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
+  }
+  
+  // Calculate batch size based on total users:
+  // - 1-50 users: process 10 at a time
+  // - 51-200 users: process 20 at a time
+  // - 201-500 users: process 30 at a time
+  // - 501-1000 users: process 40 at a time
+  // - 1000+ users: process 50 at a time (max)
+  if ( $total_users <= 50 ) {
+    $batch_size = 10;
+  } elseif ( $total_users <= 200 ) {
+    $batch_size = 20;
+  } elseif ( $total_users <= 500 ) {
+    $batch_size = 30;
+  } elseif ( $total_users <= 1000 ) {
+    $batch_size = 40;
+  } else {
+    $batch_size = 50; // Max batch size to prevent timeouts
+  }
+  
+  artly_reminder_bridge_log( sprintf( 'Using batch size: %d (total users: %d)', $batch_size, $total_users ) );
+  
   $offset = 0;
   $total_upserted = 0;
-  $total_users = 0;
+  $total_processed = 0;
+  $batch_number = 0;
 
   while ( true ) {
+    $batch_number++;
+    
     // Fetch users in batches
     $users = get_users( array( 
       'fields' => array( 'ID', 'user_email' ),
@@ -248,20 +283,45 @@ function artly_sync_users_from_woo(): array {
       continue;
     }
 
+    // Log batch progress
+    $progress = $total_users > 0 ? round( ( $total_processed / $total_users ) * 100, 1 ) : 0;
+    artly_reminder_bridge_log( sprintf( 
+      'Processing batch %d: %d users (Progress: %d/%d, %.1f%%)', 
+      $batch_number, 
+      count( $payload ), 
+      $total_processed, 
+      $total_users, 
+      $progress 
+    ) );
+
     $result = artly_reminder_bridge_post_to_api( 'artly/sync/users', $payload );
     if ( null === $result ) {
       $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
-      $msg = sprintf( 'Failed to sync users batch (offset %d). %s', $offset, $error );
+      $msg = sprintf( 'Failed to sync users batch %d (offset %d, %d users). %s', $batch_number, $offset, count( $payload ), $error );
       artly_reminder_bridge_log( $msg );
-      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users ) );
-      return array( 'success' => false, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users );
+      update_option( ARB_LAST_SYNC_RESULT, array( 
+        'type' => 'users', 
+        'success' => false, 
+        'message' => $msg, 
+        'count' => $total_upserted, 
+        'total' => $total_processed,
+        'progress' => $progress 
+      ) );
+      return array( 'success' => false, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_processed );
     }
 
     $batch_upserted = (int) ( $result['upserted'] ?? count( $payload ) );
     $total_upserted += $batch_upserted;
-    $total_users += count( $payload );
+    $total_processed += count( $payload );
     
-    artly_reminder_bridge_log( sprintf( 'Synced batch: %d users (offset %d)', $batch_upserted, $offset ) );
+    artly_reminder_bridge_log( sprintf( 
+      'Batch %d completed: %d users synced (Total: %d/%d, %.1f%%)', 
+      $batch_number, 
+      $batch_upserted, 
+      $total_processed, 
+      $total_users, 
+      round( ( $total_processed / $total_users ) * 100, 1 ) 
+    ) );
 
     $offset += $batch_size;
     
@@ -269,16 +329,29 @@ function artly_sync_users_from_woo(): array {
     if ( count( $users ) < $batch_size ) {
       break;
     }
+    
+    // Add a small delay between batches to prevent overwhelming the server
+    // Only delay if we have more batches to process
+    if ( $offset < $total_users ) {
+      usleep( 500000 ); // 0.5 second delay between batches
+    }
   }
 
   if ( $total_upserted > 0 ) {
-    $msg = sprintf( 'Successfully synced %d users', $total_upserted );
+    $msg = sprintf( 'Successfully synced %d of %d users', $total_upserted, $total_users );
     artly_reminder_bridge_log( $msg );
-    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users ) );
-    return array( 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users );
+    update_option( ARB_LAST_SYNC_RESULT, array( 
+      'type' => 'users', 
+      'success' => true, 
+      'message' => $msg, 
+      'count' => $total_upserted, 
+      'total' => $total_users,
+      'batches' => $batch_number 
+    ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users, 'batches' => $batch_number );
   }
   
-  $msg = 'No users to sync.';
+  $msg = 'No users were synced.';
   artly_reminder_bridge_log( $msg );
   update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
   return array( 'success' => false, 'message' => $msg, 'count' => 0 );
@@ -451,17 +524,43 @@ function artly_reminder_bridge_render_admin_page(): void {
   $last_sync  = get_option( ARB_LAST_SYNC_TIME_OPTION );
   $api_url    = get_option( ARB_ENGINE_URL_OPTION );
   $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
+  $user_count = count_users();
+  $total_users = (int) $user_count['total_users'];
+  
+  // Calculate expected batch size for display
+  $expected_batch_size = 50;
+  if ( $total_users <= 50 ) {
+    $expected_batch_size = 10;
+  } elseif ( $total_users <= 200 ) {
+    $expected_batch_size = 20;
+  } elseif ( $total_users <= 500 ) {
+    $expected_batch_size = 30;
+  } elseif ( $total_users <= 1000 ) {
+    $expected_batch_size = 40;
+  }
+  $expected_batches = $total_users > 0 ? ceil( $total_users / $expected_batch_size ) : 0;
   ?>
   <div class="wrap">
     <h1><?php esc_html_e( 'Artly Reminder Sync', 'artly-reminder-bridge' ); ?></h1>
     <?php if ( $message ) : ?>
-      <div class="notice notice-success"><p><?php echo esc_html( $message ); ?></p></div>
+      <div class="notice notice-success"><p><?php echo wp_kses_post( $message ); ?></p></div>
     <?php endif; ?>
     <table class="widefat" style="max-width: 700px; margin-top: 10px;">
       <tbody>
         <tr>
           <th><?php esc_html_e( 'WordPress Users', 'artly-reminder-bridge' ); ?></th>
-          <td><strong><?php echo esc_html( $user_count['total_users'] ); ?></strong> total users</td>
+          <td><strong><?php echo esc_html( $total_users ); ?></strong> total users</td>
+        </tr>
+        <tr>
+          <th><?php esc_html_e( 'Sync Strategy', 'artly-reminder-bridge' ); ?></th>
+          <td>
+            <?php if ( $total_users > 0 ) : ?>
+              Batch size: <strong><?php echo esc_html( $expected_batch_size ); ?></strong> users per batch<br>
+              Expected batches: <strong><?php echo esc_html( $expected_batches ); ?></strong>
+            <?php else : ?>
+              No users to sync
+            <?php endif; ?>
+          </td>
         </tr>
         <tr>
           <th><?php esc_html_e( 'Last Woo Points Log ID', 'artly-reminder-bridge' ); ?></th>
@@ -524,7 +623,13 @@ function artly_reminder_bridge_render_admin_page(): void {
         <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
         <p>
           <button type="submit" name="artly_sync_users" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
-          <span class="description"><?php esc_html_e( 'Sync all WordPress users to the Reminder Engine', 'artly-reminder-bridge' ); ?> (<?php echo esc_html( $user_count['total_users'] ); ?> users)</span>
+          <span class="description">
+            <?php esc_html_e( 'Sync all WordPress users to the Reminder Engine', 'artly-reminder-bridge' ); ?> 
+            (<?php echo esc_html( $total_users ); ?> users, ~<?php echo esc_html( $expected_batches ); ?> batches)
+            <?php if ( $total_users > 100 ) : ?>
+              <br><em style="color: #666;"><?php esc_html_e( 'Note: Large syncs are processed in batches to prevent timeouts.', 'artly-reminder-bridge' ); ?></em>
+            <?php endif; ?>
+          </span>
         </p>
         <p>
           <button type="submit" name="artly_sync_points" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
