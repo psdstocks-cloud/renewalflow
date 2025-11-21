@@ -31,7 +31,8 @@ function artly_reminder_bridge_activate(): void {
   add_option( ARB_ENGINE_SECRET_OPTION, '' );
 }
 
-add_action( ARB_CRON_HOOK, 'artly_sync_points_from_woo' );
+// Hourly cron syncs only incremental changes
+add_action( ARB_CRON_HOOK, 'artly_sync_points_changes_from_woo' );
 
 function artly_reminder_bridge_get_points_table( \wpdb $wpdb ): string {
   return $wpdb->prefix . 'wc_points_rewards_user_points_log';
@@ -147,6 +148,155 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
 
 function artly_reminder_bridge_post_events( array $events ): ?array {
   return artly_reminder_bridge_post_to_api( 'artly/sync/points-events', $events );
+}
+
+function artly_reminder_bridge_post_balances( array $balances ): ?array {
+  return artly_reminder_bridge_post_to_api( 'artly/sync/points-balances', $balances );
+}
+
+function artly_reminder_bridge_post_changes( array $changes ): ?array {
+  return artly_reminder_bridge_post_to_api( 'artly/sync/points-changes', $changes );
+}
+
+// Check if user points table exists (for current balances)
+function artly_reminder_bridge_user_points_table_exists( \wpdb $wpdb ): bool {
+  $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+  return (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+}
+
+// Sync current points balances only (for initial sync)
+function artly_sync_points_balances_from_woo(): array {
+  global $wpdb;
+
+  if ( ! artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+    $msg = 'Woo Points & Rewards table not found; skipping sync.';
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
+  }
+
+  $balances = array();
+  
+  // Try to get balances from user_points table first (if exists)
+  if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
+    $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+    $users = $wpdb->get_results( "SELECT user_id, points_balance FROM {$table_name}" );
+    
+    foreach ( $users as $user_row ) {
+      $user = get_userdata( (int) $user_row->user_id );
+      if ( $user && ! empty( $user->user_email ) ) {
+        $balances[] = array(
+          'wp_user_id' => (int) $user_row->user_id,
+          'email' => $user->user_email,
+          'points_balance' => (int) $user_row->points_balance,
+        );
+      }
+    }
+  } else {
+    // Calculate balances from logs
+    $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+    $query = "SELECT user_id, SUM(points) as balance FROM {$log_table} GROUP BY user_id";
+    $results = $wpdb->get_results( $query );
+    
+    foreach ( $results as $row ) {
+      $user = get_userdata( (int) $row->user_id );
+      if ( $user && ! empty( $user->user_email ) ) {
+        $balances[] = array(
+          'wp_user_id' => (int) $row->user_id,
+          'email' => $user->user_email,
+          'points_balance' => (int) $row->balance,
+        );
+      }
+    }
+  }
+
+  if ( empty( $balances ) ) {
+    $msg = 'No points balances found to sync.';
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => 0 ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => 0 );
+  }
+
+  // Send balances in batches
+  $batch_size = 100;
+  $total_updated = 0;
+  $batches = array_chunk( $balances, $batch_size );
+
+  foreach ( $batches as $batch ) {
+    $result = artly_reminder_bridge_post_balances( $batch );
+    if ( null === $result ) {
+      $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during points balance sync' );
+      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => false, 'message' => $error, 'count' => $total_updated ) );
+      return array( 'success' => false, 'message' => $error, 'count' => $total_updated );
+    }
+    $total_updated += (int) ( $result['updated'] ?? count( $batch ) );
+  }
+
+  $msg = sprintf( 'Successfully synced %d points balances', $total_updated );
+  artly_reminder_bridge_log( $msg );
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'points', 'success' => true, 'message' => $msg, 'count' => $total_updated ) );
+  update_option( ARB_LAST_SYNC_TIME_OPTION, current_time( 'mysql', true ) );
+  
+  return array( 'success' => true, 'message' => $msg, 'count' => $total_updated );
+}
+
+// Sync incremental changes (new logs since last check) - for hourly cron
+function artly_sync_points_changes_from_woo(): array {
+  global $wpdb;
+
+  if ( ! artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+    $msg = 'Woo Points & Rewards table not found; skipping sync.';
+    artly_reminder_bridge_log( $msg );
+    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
+  }
+
+  $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
+  $total_imported = 0;
+  $batch_number = 0;
+
+  while ( true ) {
+    $rows = artly_reminder_bridge_fetch_events_batch( $wpdb, $last_id );
+
+    if ( empty( $rows ) ) {
+      break;
+    }
+
+    $batch_number++;
+    $payload = array();
+
+    foreach ( $rows as $row ) {
+      $item = artly_reminder_bridge_build_payload_item( $row );
+      if ( $item ) {
+        $payload[] = $item;
+      }
+    }
+
+    if ( empty( $payload ) ) {
+      $last_id = (int) end( $rows )->id;
+      update_option( ARB_LAST_LOG_ID_OPTION, $last_id );
+      continue;
+    }
+
+    $result = artly_reminder_bridge_post_changes( $payload );
+    if ( null === $result ) {
+      $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during points sync' );
+      artly_reminder_bridge_log( 'Hourly sync error: ' . $error );
+      return array( 'success' => false, 'message' => $error, 'count' => $total_imported );
+    }
+
+    $last_id = (int) end( $rows )->id;
+    update_option( ARB_LAST_LOG_ID_OPTION, $last_id );
+    $batch_imported = (int) ( $result['imported'] ?? count( $payload ) );
+    $total_imported += $batch_imported;
+  }
+
+  if ( $total_imported > 0 ) {
+    $msg = sprintf( 'Hourly sync: synced %d new points events (up to ID %d)', $total_imported, $last_id );
+    artly_reminder_bridge_log( $msg );
+    update_option( ARB_LAST_SYNC_TIME_OPTION, current_time( 'mysql', true ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $total_imported );
+  }
+  
+  return array( 'success' => true, 'message' => 'No new points events to sync.', 'count' => 0 );
 }
 
 function artly_sync_points_from_woo(): array {
@@ -507,47 +657,9 @@ add_action( 'wp_ajax_artly_start_sync_points', 'artly_start_sync_points' );
 function artly_start_sync_points() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
   
-  // Initialize progress before starting
-  global $wpdb;
-  $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
-  $total_count = 0;
-  
-  if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
-    $total_count_query = $wpdb->prepare(
-      "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
-      $last_id
-    );
-    $total_count = (int) $wpdb->get_var( $total_count_query );
-  }
-  
-  update_option( ARB_SYNC_PROGRESS_OPTION, array(
-    'type' => 'points',
-    'status' => 'running',
-    'processed' => 0,
-    'total' => $total_count,
-    'imported' => 0,
-    'message' => 'Starting sync...',
-  ) );
-  
-  // Send response immediately so client can start polling
-  wp_send_json_success( array( 'started' => true, 'total' => $total_count ) );
-  
-  // Run sync in background (after response sent)
-  if ( function_exists( 'fastcgi_finish_request' ) ) {
-    fastcgi_finish_request();
-  } else {
-    // For non-FastCGI, flush output
-    if ( ob_get_level() ) {
-      ob_end_flush();
-    }
-    flush();
-  }
-  
-  ignore_user_abort( true );
-  set_time_limit( 300 ); // 5 minutes
-  
-  // Run the sync
-  artly_sync_points_from_woo();
+  // Run balance sync (fast, no need for background processing)
+  $result = artly_sync_points_balances_from_woo();
+  wp_send_json_success( $result );
 }
 
 add_action( 'wp_ajax_artly_get_points_count', 'artly_get_points_count' );
@@ -906,7 +1018,7 @@ function artly_reminder_bridge_render_admin_page(): void {
             
             if (syncBtn) {
               syncBtn.disabled = false;
-              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
             }
             
             if (progressInterval) {
@@ -934,7 +1046,7 @@ function artly_reminder_bridge_render_admin_page(): void {
             
             if (syncBtn) {
               syncBtn.disabled = false;
-              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
             }
             
             if (progressInterval) {
@@ -1006,7 +1118,7 @@ function artly_reminder_bridge_render_admin_page(): void {
             syncBtn.disabled = true;
             syncBtn.textContent = 'Syncing...';
             
-            // Start the sync via AJAX
+            // Start the sync via AJAX (balance sync is fast, no need for progress polling)
             fetch(ajaxurl, {
               method: 'POST',
               headers: {
@@ -1019,14 +1131,29 @@ function artly_reminder_bridge_render_admin_page(): void {
             })
             .then(response => response.json())
             .then(data => {
-              // Start polling for progress
-              setTimeout(updateProgress, 500);
+              if (data.success) {
+                progressDiv.style.display = 'block';
+                progressMessage.textContent = '✅ ' + (data.data.message || 'Sync completed successfully!');
+                progressBar.style.width = '100%';
+                progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                progressPercentage.textContent = '100%';
+                progressDetails.innerHTML = `<strong style="color: #46b450;">✓ Completed!</strong><br><strong>Updated:</strong> ${formatNumber(data.data.count || 0)} balances`;
+                
+                setTimeout(() => {
+                  location.reload();
+                }, 2000);
+              } else {
+                progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                syncBtn.disabled = false;
+                syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
+              }
             })
             .catch(error => {
               console.error('Error starting sync:', error);
               progressMessage.textContent = '❌ Error starting sync. Please try again.';
               syncBtn.disabled = false;
-              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
             });
           }
         })

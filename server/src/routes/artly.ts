@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { artlyAuth } from '../middleware/artlyAuth';
 import {
   processPointsEvents,
+  processPointsBalances,
+  processPointsChanges,
   processSubscriptions,
   processUsers,
   processCharges,
@@ -96,6 +98,26 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
   try {
     const workspaceId = (req as any).workspaceId;
     const result = await processPointsEvents(req.body, workspaceId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+artlyRouter.post('/artly/sync/points-balances', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const result = await processPointsBalances(req.body, workspaceId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+artlyRouter.post('/artly/sync/points-changes', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const result = await processPointsChanges(req.body, workspaceId);
     res.json(result);
   } catch (error) {
     next(error);

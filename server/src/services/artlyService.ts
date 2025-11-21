@@ -538,3 +538,263 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
 
   return { upserted };
 };
+
+
+// Schema for points balance sync (current balances only)
+const pointsBalanceSchema = z.object({
+  wp_user_id: z.number().int(),
+  email: z.string().email(),
+  points_balance: z.number().int(),
+});
+
+export const processPointsBalances = async (rawBalances: unknown, workspaceId?: string | null) => {
+  const balances = z.array(pointsBalanceSchema).parse(rawBalances);
+  const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {},
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
+  let updated = 0;
+
+  for (const balance of balances) {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Upsert customer
+      const customer = await tx.customer.upsert({
+        where: {
+          tenantId_externalUserId: {
+            tenantId,
+            externalUserId: BigInt(balance.wp_user_id),
+          },
+        },
+        update: { email: balance.email },
+        create: {
+          tenantId,
+          externalUserId: BigInt(balance.wp_user_id),
+          email: balance.email,
+        },
+      });
+
+      // Update wallet snapshot with current balance
+      await tx.walletSnapshot.upsert({
+        where: {
+          tenantId_customerId: {
+            tenantId,
+            customerId: customer.id,
+          },
+        },
+        create: {
+          tenantId,
+          customerId: customer.id,
+          pointsBalance: balance.points_balance,
+        },
+        update: {
+          pointsBalance: balance.points_balance,
+          updatedAt: new Date(),
+        },
+      });
+    });
+
+    updated += 1;
+  }
+
+  return { updated };
+};
+
+// Schema for incremental points changes (new logs since last sync)
+const pointsChangeSchema = z.object({
+  external_event_id: z.number().int(),
+  wp_user_id: z.number().int(),
+  email: z.string().email(),
+  points_delta: z.number().int(),
+  event_type: z.string(),
+  source: z.string(),
+  order_id: z.string().optional().nullable().transform(val => val === null ? undefined : val),
+  created_at: z.string().datetime().or(z.string().transform((val) => {
+    try {
+      const date = new Date(val);
+      if (isNaN(date.getTime())) {
+        return new Date().toISOString();
+      }
+      return date.toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  })),
+});
+
+export const processPointsChanges = async (rawChanges: unknown, workspaceId?: string | null) => {
+  // Preprocess changes to handle null values and invalid datetime formats
+  const rawChangesArray = Array.isArray(rawChanges) ? rawChanges : [];
+  const preprocessedChanges = rawChangesArray.map((change: any) => {
+    const preprocessed = { ...change };
+    
+    if (preprocessed.order_id === null) {
+      preprocessed.order_id = undefined;
+    }
+    
+    if (preprocessed.created_at) {
+      try {
+        const date = new Date(preprocessed.created_at);
+        if (!isNaN(date.getTime())) {
+          preprocessed.created_at = date.toISOString();
+        } else {
+          preprocessed.created_at = new Date().toISOString();
+        }
+      } catch (e) {
+        preprocessed.created_at = new Date().toISOString();
+      }
+    } else {
+      preprocessed.created_at = new Date().toISOString();
+    }
+    
+    return preprocessed;
+  });
+  
+  const parseResult = z.array(pointsChangeSchema).safeParse(preprocessedChanges);
+  
+  if (!parseResult.success) {
+    console.error('[processPointsChanges] Validation errors:', JSON.stringify(parseResult.error.errors, null, 2));
+    throw new Error(`Validation failed: ${JSON.stringify(parseResult.error.errors)}`);
+  }
+  
+  const changes = parseResult.data;
+  const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {},
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
+  let imported = 0;
+  let skippedExisting = 0;
+
+  for (const change of changes) {
+    if (change.points_delta === 0) {
+      continue;
+    }
+
+    const externalEventId = BigInt(change.external_event_id);
+
+    // Check if already processed
+    const existing = await prisma.pointsTransaction.findUnique({
+      where: {
+        tenantId_externalEventId: {
+          tenantId,
+          externalEventId,
+        },
+      },
+    });
+
+    if (existing) {
+      skippedExisting += 1;
+      continue;
+    }
+
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const customer = await tx.customer.upsert({
+        where: {
+          tenantId_externalUserId: {
+            tenantId,
+            externalUserId: BigInt(change.wp_user_id),
+          },
+        },
+        update: { email: change.email },
+        create: {
+          tenantId,
+          externalUserId: BigInt(change.wp_user_id),
+          email: change.email,
+        },
+      });
+
+      const createdAt = new Date(change.created_at);
+
+      if (change.points_delta > 0) {
+        // Points added - create batch
+        const batch = await tx.pointsBatch.create({
+          data: {
+            tenantId,
+            customerId: customer.id,
+            source: change.source,
+            externalOrderId: change.order_id,
+            pointsTotal: change.points_delta,
+            pointsRemaining: change.points_delta,
+            purchasedAt: createdAt,
+            expiresAt: addDays(createdAt, 30),
+            status: 'active',
+          },
+        });
+
+        await tx.pointsTransaction.create({
+          data: {
+            tenantId,
+            customerId: customer.id,
+            batchId: batch.id,
+            delta: change.points_delta,
+            type: 'purchase',
+            referenceType: 'woo_order',
+            referenceId: change.order_id,
+            externalEventId: externalEventId,
+            createdAt,
+          },
+        });
+      } else {
+        // Points deducted - consume from batches
+        const deltaToSpend = Math.abs(change.points_delta);
+        let remaining = deltaToSpend;
+
+        const batches = await tx.pointsBatch.findMany({
+          where: {
+            tenantId,
+            customerId: customer.id,
+            status: 'active',
+            pointsRemaining: { gt: 0 },
+          },
+          orderBy: { purchasedAt: 'asc' },
+        });
+
+        for (const batch of batches) {
+          if (remaining <= 0) break;
+          const consume = Math.min(batch.pointsRemaining, remaining);
+          await tx.pointsBatch.update({
+            where: { id: batch.id },
+            data: { pointsRemaining: batch.pointsRemaining - consume },
+          });
+          remaining -= consume;
+        }
+
+        await tx.pointsTransaction.create({
+          data: {
+            tenantId,
+            customerId: customer.id,
+            delta: change.points_delta,
+            type: 'spend_download',
+            referenceType: 'woo_order',
+            referenceId: change.order_id,
+            externalEventId: externalEventId,
+            createdAt,
+          },
+        });
+      }
+
+      await recalculateWalletSnapshot(tx, customer.id);
+    });
+
+    imported += 1;
+  }
+
+  return { imported, skipped_existing: skippedExisting };
+};
