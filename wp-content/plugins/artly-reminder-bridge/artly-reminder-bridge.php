@@ -788,7 +788,6 @@ function artly_reminder_bridge_render_admin_page(): void {
             // Clear progress after 5 seconds
             setTimeout(() => {
               progressDiv.style.display = 'none';
-              delete_option('_artly_sync_progress');
             }, 5000);
           } else if (progress.status === 'error') {
             progressDiv.style.display = 'block';
