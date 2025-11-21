@@ -363,42 +363,55 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
     },
   });
   
-  let upserted = 0;
-
-  for (const user of users) {
-    // Skip users with invalid emails
+  // Filter out invalid users first
+  const validUsers = users.filter(user => {
     if (!user.email || !user.email.includes('@')) {
       console.warn(`[processUsers] Skipping user ${user.wp_user_id} with invalid email: ${user.email}`);
-      continue;
+      return false;
     }
-    
-    await prisma.customer.upsert({
-      where: {
-        tenantId_externalUserId: {
-          tenantId,
-          externalUserId: BigInt(user.wp_user_id),
-        },
-      },
-      update: {
-        email: user.email,
-        phone: user.phone ?? undefined,
-        whatsapp: user.whatsapp ?? undefined,
-        locale: user.locale ?? undefined,
-        timezone: user.timezone ?? undefined,
-      },
-      create: {
-        tenantId,
-        externalUserId: BigInt(user.wp_user_id),
-        email: user.email,
-        phone: user.phone ?? undefined,
-        whatsapp: user.whatsapp ?? undefined,
-        locale: user.locale ?? undefined,
-        timezone: user.timezone ?? undefined,
-      },
-    });
+    return true;
+  });
 
-    upserted += 1;
+  if (validUsers.length === 0) {
+    return { upserted: 0 };
   }
+
+  // Use a transaction to batch all upserts for better performance
+  let upserted = 0;
+  await prisma.$transaction(
+    async (tx) => {
+      for (const user of validUsers) {
+        await tx.customer.upsert({
+          where: {
+            tenantId_externalUserId: {
+              tenantId,
+              externalUserId: BigInt(user.wp_user_id),
+            },
+          },
+          update: {
+            email: user.email,
+            phone: user.phone ?? undefined,
+            whatsapp: user.whatsapp ?? undefined,
+            locale: user.locale ?? 'en',
+            timezone: user.timezone ?? undefined,
+          },
+          create: {
+            tenantId,
+            externalUserId: BigInt(user.wp_user_id),
+            email: user.email,
+            phone: user.phone ?? undefined,
+            whatsapp: user.whatsapp ?? undefined,
+            locale: user.locale ?? 'en',
+            timezone: user.timezone ?? undefined,
+          },
+        });
+        upserted += 1;
+      }
+    },
+    {
+      timeout: 30000, // 30 second timeout for transaction
+    }
+  );
 
   return { upserted };
 };

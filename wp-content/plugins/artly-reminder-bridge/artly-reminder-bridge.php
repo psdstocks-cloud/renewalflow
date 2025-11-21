@@ -111,7 +111,7 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
         'x-artly-secret' => trim( $api_secret ), // Trim any whitespace
       ),
       'body'    => wp_json_encode( $payload ),
-      'timeout' => 30,
+      'timeout' => 60, // Increased timeout for large batches
     )
   );
   
@@ -212,40 +212,76 @@ function artly_sync_points_from_woo(): array {
 }
 
 function artly_sync_users_from_woo(): array {
-  $users = get_users( array( 'fields' => array( 'ID', 'user_email' ) ) );
-  $payload = array();
+  $batch_size = 100; // Process users in batches of 100
+  $offset = 0;
+  $total_upserted = 0;
+  $total_users = 0;
 
-  foreach ( $users as $user ) {
-    $user_meta = get_user_meta( $user->ID );
-    $payload[] = array(
-      'wp_user_id' => (int) $user->ID,
-      'email'      => $user->user_email,
-      'phone'      => isset( $user_meta['billing_phone'][0] ) ? $user_meta['billing_phone'][0] : null,
-      'whatsapp'   => isset( $user_meta['whatsapp'][0] ) ? $user_meta['whatsapp'][0] : null,
-      'locale'     => get_user_locale( $user->ID ),
-      'timezone'   => get_user_meta( $user->ID, 'timezone_string', true ) ?: null,
-    );
+  while ( true ) {
+    // Fetch users in batches
+    $users = get_users( array( 
+      'fields' => array( 'ID', 'user_email' ),
+      'number' => $batch_size,
+      'offset' => $offset,
+    ) );
+
+    if ( empty( $users ) ) {
+      break; // No more users
+    }
+
+    $payload = array();
+
+    foreach ( $users as $user ) {
+      $user_meta = get_user_meta( $user->ID );
+      $payload[] = array(
+        'wp_user_id' => (int) $user->ID,
+        'email'      => $user->user_email,
+        'phone'      => isset( $user_meta['billing_phone'][0] ) ? $user_meta['billing_phone'][0] : null,
+        'whatsapp'   => isset( $user_meta['whatsapp'][0] ) ? $user_meta['whatsapp'][0] : null,
+        'locale'     => get_user_locale( $user->ID ),
+        'timezone'   => get_user_meta( $user->ID, 'timezone_string', true ) ?: null,
+      );
+    }
+
+    if ( empty( $payload ) ) {
+      $offset += $batch_size;
+      continue;
+    }
+
+    $result = artly_reminder_bridge_post_to_api( 'artly/sync/users', $payload );
+    if ( null === $result ) {
+      $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
+      $msg = sprintf( 'Failed to sync users batch (offset %d). %s', $offset, $error );
+      artly_reminder_bridge_log( $msg );
+      update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users ) );
+      return array( 'success' => false, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users );
+    }
+
+    $batch_upserted = (int) ( $result['upserted'] ?? count( $payload ) );
+    $total_upserted += $batch_upserted;
+    $total_users += count( $payload );
+    
+    artly_reminder_bridge_log( sprintf( 'Synced batch: %d users (offset %d)', $batch_upserted, $offset ) );
+
+    $offset += $batch_size;
+    
+    // If we got fewer users than the batch size, we're done
+    if ( count( $users ) < $batch_size ) {
+      break;
+    }
   }
 
-  if ( empty( $payload ) ) {
-    $msg = 'No users to sync.';
+  if ( $total_upserted > 0 ) {
+    $msg = sprintf( 'Successfully synced %d users', $total_upserted );
     artly_reminder_bridge_log( $msg );
-    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
-    return array( 'success' => false, 'message' => $msg, 'count' => 0 );
-  }
-
-  $result = artly_reminder_bridge_post_to_api( 'artly/sync/users', $payload );
-  if ( null !== $result ) {
-    $upserted = (int) ( $result['upserted'] ?? count( $payload ) );
-    $msg = sprintf( 'Successfully synced %d users', $upserted );
-    artly_reminder_bridge_log( $msg );
-    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) ) );
-    return array( 'success' => true, 'message' => $msg, 'count' => $upserted, 'total' => count( $payload ) );
+    update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users ) );
+    return array( 'success' => true, 'message' => $msg, 'count' => $total_upserted, 'total' => $total_users );
   }
   
-  $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
-  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $error, 'count' => 0 ) );
-  return array( 'success' => false, 'message' => $error, 'count' => 0 );
+  $msg = 'No users to sync.';
+  artly_reminder_bridge_log( $msg );
+  update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
+  return array( 'success' => false, 'message' => $msg, 'count' => 0 );
 }
 
 function artly_sync_charges_from_woo(): array {
