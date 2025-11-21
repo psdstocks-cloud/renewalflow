@@ -548,8 +548,11 @@ const pointsBalanceSchema = z.object({
 });
 
 export const processPointsBalances = async (rawBalances: unknown, workspaceId?: string | null) => {
+  console.log('[processPointsBalances] Starting balance sync...');
   const balances = z.array(pointsBalanceSchema).parse(rawBalances);
   const tenantId = getTenantId(workspaceId);
+  
+  console.log('[processPointsBalances] Parsed', balances.length, 'balances for tenant:', tenantId);
   
   // Ensure tenant exists
   await prisma.tenant.upsert({
@@ -563,49 +566,68 @@ export const processPointsBalances = async (rawBalances: unknown, workspaceId?: 
   });
   
   let updated = 0;
+  let errors: string[] = [];
 
-  for (const balance of balances) {
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // Upsert customer
-      const customer = await tx.customer.upsert({
-        where: {
-          tenantId_externalUserId: {
+  for (let i = 0; i < balances.length; i++) {
+    const balance = balances[i];
+    try {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        // Upsert customer
+        const customer = await tx.customer.upsert({
+          where: {
+            tenantId_externalUserId: {
+              tenantId,
+              externalUserId: BigInt(balance.wp_user_id),
+            },
+          },
+          update: { email: balance.email },
+          create: {
             tenantId,
             externalUserId: BigInt(balance.wp_user_id),
+            email: balance.email,
           },
-        },
-        update: { email: balance.email },
-        create: {
-          tenantId,
-          externalUserId: BigInt(balance.wp_user_id),
-          email: balance.email,
-        },
-      });
+        });
 
-      // Update wallet snapshot with current balance
-      await tx.walletSnapshot.upsert({
-        where: {
-          tenantId_customerId: {
+        // Update wallet snapshot with current balance
+        await tx.walletSnapshot.upsert({
+          where: {
+            tenantId_customerId: {
+              tenantId,
+              customerId: customer.id,
+            },
+          },
+          create: {
             tenantId,
             customerId: customer.id,
+            pointsBalance: balance.points_balance,
           },
-        },
-        create: {
-          tenantId,
-          customerId: customer.id,
-          pointsBalance: balance.points_balance,
-        },
-        update: {
-          pointsBalance: balance.points_balance,
-          updatedAt: new Date(),
-        },
+          update: {
+            pointsBalance: balance.points_balance,
+            updatedAt: new Date(),
+          },
+        });
       });
-    });
 
-    updated += 1;
+      updated += 1;
+      
+      // Log progress every 50 records
+      if (updated % 50 === 0) {
+        console.log(`[processPointsBalances] Processed ${updated}/${balances.length} balances...`);
+      }
+    } catch (error: any) {
+      const errorMsg = `Error processing balance for wp_user_id ${balance.wp_user_id} (${balance.email}): ${error.message}`;
+      console.error('[processPointsBalances]', errorMsg);
+      errors.push(errorMsg);
+    }
   }
 
-  return { updated };
+  console.log(`[processPointsBalances] Completed: ${updated} balances updated, ${errors.length} errors`);
+  
+  if (errors.length > 0) {
+    console.error('[processPointsBalances] Errors:', errors.slice(0, 10)); // Log first 10 errors
+  }
+
+  return { updated, errors: errors.length > 0 ? errors.slice(0, 10) : undefined };
 };
 
 // Schema for incremental points changes (new logs since last sync)

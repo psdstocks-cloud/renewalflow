@@ -21,9 +21,9 @@ const subscriberSchema = z.object({
 
 export type SubscriberInput = z.infer<typeof subscriberSchema>;
 
-export async function listSubscribers(params: { status?: string; search?: string; skip?: number; take?: number }) {
-  const { status, search, skip = 0, take = 50 } = params;
-  const where: any = {};
+export async function listSubscribers(params: { status?: string; search?: string; skip?: number; take?: number; workspaceId: string }) {
+  const { status, search, skip = 0, take = 50, workspaceId } = params;
+  const where: any = { workspaceId }; // Filter by workspaceId
   if (status) {
     where.status = status;
   }

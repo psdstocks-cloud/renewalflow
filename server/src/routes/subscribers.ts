@@ -31,11 +31,25 @@ subscriberRouter.get('/api/subscribers/stats', async (_req, res, next) => {
 subscriberRouter.get('/api/subscribers', async (req, res, next) => {
   try {
     const { status, search, skip, take } = req.query;
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
+
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
+
     const result = await listSubscribers({
       status: status as string | undefined,
       search: search as string | undefined,
       skip: skip ? Number(skip) : undefined,
-      take: take ? Number(take) : undefined
+      take: take ? Number(take) : undefined,
+      workspaceId: workspaceUser.workspaceId
     });
     res.json(result);
   } catch (error) {

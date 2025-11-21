@@ -107,8 +107,66 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
 artlyRouter.post('/artly/sync/points-balances', artlyAuth, async (req, res, next) => {
   try {
     const workspaceId = (req as any).workspaceId;
+    console.log('[artly/sync/points-balances] Received balance sync request');
+    console.log('[artly/sync/points-balances] WorkspaceId:', workspaceId);
+    console.log('[artly/sync/points-balances] Body length:', Array.isArray(req.body) ? req.body.length : 'not an array');
+    
     const result = await processPointsBalances(req.body, workspaceId);
+    console.log('[artly/sync/points-balances] Sync completed:', result);
     res.json(result);
+  } catch (error) {
+    console.error('[artly/sync/points-balances] Error:', error);
+    next(error);
+  }
+});
+
+// Debug endpoint to check synced balances (requires auth)
+artlyRouter.get('/artly/debug/balances', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const tenantId = workspaceId || 'artly';
+    
+    // Get wallet snapshots with customer info
+    const snapshots = await prisma.walletSnapshot.findMany({
+      where: { tenantId },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            email: true,
+            externalUserId: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 20, // Get top 20 most recently updated
+    });
+    
+    // Get total count
+    const totalCount = await prisma.walletSnapshot.count({
+      where: { tenantId },
+    });
+    
+    // Get customers with points > 0
+    const customersWithPoints = await prisma.walletSnapshot.count({
+      where: {
+        tenantId,
+        pointsBalance: { gt: 0 },
+      },
+    });
+    
+    res.json({
+      tenantId,
+      workspaceId,
+      totalSnapshots: totalCount,
+      customersWithPoints,
+      recentSnapshots: snapshots.map(s => ({
+        email: s.customer.email,
+        wpUserId: s.customer.externalUserId.toString(),
+        pointsBalance: s.pointsBalance,
+        updatedAt: s.updatedAt,
+      })),
+    });
   } catch (error) {
     next(error);
   }
