@@ -12,6 +12,7 @@ import {
 } from '../services/subscriberService';
 import { z } from 'zod';
 import { getSettings } from '../services/settingsService';
+import { prisma } from '../config/db';
 
 export const subscriberRouter = Router();
 
