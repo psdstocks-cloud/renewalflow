@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { Subscriber } from '@prisma/client';
+import type { Subscriber } from '@prisma/client';
 import { z } from 'zod';
 import { addDays } from 'date-fns';
 
