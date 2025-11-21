@@ -67,6 +67,18 @@ const recalculateWalletSnapshot = async (
 export const processPointsEvents = async (rawEvents: unknown, workspaceId?: string | null) => {
   const events = z.array(pointsEventSchema).parse(rawEvents);
   const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists before processing events
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {},
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
   let imported = 0;
   let skippedExisting = 0;
 
@@ -234,6 +246,18 @@ export const expirePoints = async () => {
 export const processSubscriptions = async (rawSubscriptions: unknown, workspaceId?: string | null) => {
   const subscriptions = z.array(subscriptionSchema).parse(rawSubscriptions);
   const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists before processing subscriptions
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {},
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
   let upserted = 0;
 
   for (const sub of subscriptions) {
@@ -327,6 +351,18 @@ export const processUsers = async (rawUsers: unknown, workspaceId?: string | nul
 
 const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspaceId?: string | null) => {
   const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists before creating customers
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {}, // Don't update if exists
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
   let upserted = 0;
 
   for (const user of users) {
@@ -382,6 +418,18 @@ const chargeSchema = z.object({
 export const processCharges = async (rawCharges: unknown, workspaceId?: string | null) => {
   const charges = z.array(chargeSchema).parse(rawCharges);
   const tenantId = getTenantId(workspaceId);
+  
+  // Ensure tenant exists before processing charges
+  await prisma.tenant.upsert({
+    where: { id: tenantId },
+    update: {},
+    create: {
+      id: tenantId,
+      name: workspaceId ? `Workspace ${workspaceId.substring(0, 8)}` : 'Artly',
+      timezone: 'Africa/Cairo',
+    },
+  });
+  
   let upserted = 0;
 
   for (const charge of charges) {
