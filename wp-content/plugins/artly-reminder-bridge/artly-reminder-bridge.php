@@ -502,6 +502,78 @@ function artly_get_sync_progress() {
     wp_send_json_success( array( 'status' => 'idle' ) );
   }
 }
+
+add_action( 'wp_ajax_artly_start_sync_points', 'artly_start_sync_points' );
+function artly_start_sync_points() {
+  check_ajax_referer( 'artly_sync_points', '_wpnonce' );
+  
+  // Send response immediately so client can start polling
+  if ( function_exists( 'fastcgi_finish_request' ) ) {
+    fastcgi_finish_request();
+  } else {
+    // For non-FastCGI, send headers and flush output
+    if ( ! headers_sent() ) {
+      header( 'Content-Type: application/json' );
+      header( 'Content-Length: 0' );
+      header( 'Connection: close' );
+    }
+    if ( ob_get_level() ) {
+      ob_end_flush();
+    }
+    flush();
+  }
+  
+  // Run sync in background (after response sent)
+  ignore_user_abort( true );
+  set_time_limit( 300 ); // 5 minutes
+  
+  // Initialize progress before starting
+  global $wpdb;
+  $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
+  $total_count = 0;
+  
+  if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+    $total_count_query = $wpdb->prepare(
+      "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
+      $last_id
+    );
+    $total_count = (int) $wpdb->get_var( $total_count_query );
+  }
+  
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'points',
+    'status' => 'running',
+    'processed' => 0,
+    'total' => $total_count,
+    'imported' => 0,
+    'message' => 'Starting sync...',
+  ) );
+  
+  // Run the sync
+  artly_sync_points_from_woo();
+  
+  // This won't be sent to client, but ensures script completes
+  wp_send_json_success( array( 'started' => true ) );
+}
+
+add_action( 'wp_ajax_artly_get_points_count', 'artly_get_points_count' );
+function artly_get_points_count() {
+  check_ajax_referer( 'artly_sync_points', '_wpnonce' );
+  global $wpdb;
+  
+  $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
+  $total_count = 0;
+  
+  if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+    $total_count_query = $wpdb->prepare(
+      "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
+      $last_id
+    );
+    $total_count = (int) $wpdb->get_var( $total_count_query );
+  }
+  
+  wp_send_json_success( array( 'total' => $total_count, 'last_id' => $last_id ) );
+}
 function artly_reminder_bridge_admin_menu(): void {
   add_submenu_page(
     'woocommerce',
@@ -717,17 +789,47 @@ function artly_reminder_bridge_render_admin_page(): void {
           </span>
         </p>
         <p>
-          <button type="submit" name="artly_sync_points" value="1" class="button button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
-          <span class="description"><?php esc_html_e( 'Sync points events and logs from WooCommerce Points & Rewards', 'artly-reminder-bridge' ); ?></span>
+          <button type="button" class="button button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?></button>
+          <span class="description" id="artly-points-description">
+            <?php 
+            global $wpdb;
+            $last_id = (int) get_option( ARB_LAST_LOG_ID_OPTION, 0 );
+            $total_to_sync = 0;
+            if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+              $total_count_query = $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}wc_points_rewards_user_points_log WHERE id > %d",
+                $last_id
+              );
+              $total_to_sync = (int) $wpdb->get_var( $total_count_query );
+            }
+            esc_html_e( 'Sync points events and logs from WooCommerce Points & Rewards', 'artly-reminder-bridge' );
+            if ( $total_to_sync > 0 ) {
+              echo ' (' . esc_html( number_format( $total_to_sync ) ) . ' events to sync)';
+            }
+            ?>
+          </span>
         </p>
-        <div id="artly-sync-progress" style="display: none; margin-top: 10px; padding: 10px; background: #f0f0f0; border-left: 4px solid #2271b1; max-width: 700px;">
-          <p style="margin: 0 0 5px 0;"><strong><?php esc_html_e( 'Sync Progress', 'artly-reminder-bridge' ); ?>:</strong></p>
-          <div id="artly-progress-message" style="margin-bottom: 5px;"></div>
-          <div style="background: #fff; border: 1px solid #ddd; border-radius: 3px; height: 20px; overflow: hidden;">
-            <div id="artly-progress-bar" style="background: #2271b1; height: 100%; width: 0%; transition: width 0.3s;"></div>
+        <div id="artly-sync-progress" style="display: none; margin-top: 10px; padding: 15px; background: #f9f9f9; border-left: 4px solid #2271b1; max-width: 700px; border-radius: 4px;">
+          <p style="margin: 0 0 10px 0; font-weight: bold; color: #2271b1;">
+            <i class="dashicons dashicons-update" style="animation: spin 1s linear infinite; display: inline-block; margin-right: 5px;"></i>
+            <?php esc_html_e( 'Sync Progress', 'artly-reminder-bridge' ); ?>
+          </p>
+          <div id="artly-progress-message" style="margin-bottom: 10px; color: #333; font-size: 14px;"></div>
+          <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; height: 24px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
+            <div id="artly-progress-bar" style="background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+              <span id="artly-progress-percentage">0%</span>
+            </div>
           </div>
-          <p id="artly-progress-stats" style="margin: 5px 0 0 0; font-size: 12px; color: #666;"></p>
+          <p id="artly-progress-stats" style="margin: 10px 0 0 0; font-size: 13px; color: #666; line-height: 1.6;">
+            <span id="artly-progress-details"></span>
+          </p>
         </div>
+        <style>
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        </style>
         <p>
           <button type="submit" name="artly_sync_charges" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
           <span class="description"><?php esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine', 'artly-reminder-bridge' ); ?></span>
@@ -741,8 +843,14 @@ function artly_reminder_bridge_render_admin_page(): void {
     const progressDiv = document.getElementById('artly-sync-progress');
     const progressMessage = document.getElementById('artly-progress-message');
     const progressBar = document.getElementById('artly-progress-bar');
-    const progressStats = document.getElementById('artly-progress-stats');
+    const progressPercentage = document.getElementById('artly-progress-percentage');
+    const progressDetails = document.getElementById('artly-progress-details');
     let progressInterval = null;
+    let totalToSync = 0;
+
+    function formatNumber(num) {
+      return new Intl.NumberFormat().format(num);
+    }
 
     function updateProgress() {
       fetch(ajaxurl, {
@@ -765,44 +873,86 @@ function artly_reminder_bridge_render_admin_page(): void {
             progressMessage.textContent = progress.message || 'Syncing...';
             
             const percentage = progress.total > 0 
-              ? Math.round((progress.processed / progress.total) * 100) 
+              ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
               : 0;
-            progressBar.style.width = percentage + '%';
             
-            progressStats.textContent = `Processed: ${progress.processed} / ${progress.total} | Imported: ${progress.imported}`;
+            progressBar.style.width = percentage + '%';
+            progressPercentage.textContent = percentage + '%';
+            
+            const processed = formatNumber(progress.processed);
+            const total = formatNumber(progress.total);
+            const imported = formatNumber(progress.imported);
+            
+            progressDetails.innerHTML = `
+              <strong>Processed:</strong> ${processed} / ${total} events<br>
+              <strong>Imported:</strong> ${imported} events<br>
+              <strong>Progress:</strong> ${percentage}% complete
+            `;
             
             // Continue polling
-            setTimeout(updateProgress, 1000);
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
+            progressInterval = setTimeout(updateProgress, 800);
           } else if (progress.status === 'completed') {
             progressDiv.style.display = 'block';
-            progressMessage.textContent = progress.message || 'Sync completed!';
+            progressMessage.textContent = progress.message || '✅ Sync completed successfully!';
             progressBar.style.width = '100%';
-            progressBar.style.background = '#46b450';
-            progressStats.textContent = `Total processed: ${progress.processed} | Total imported: ${progress.imported}`;
+            progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+            progressPercentage.textContent = '100%';
+            
+            const processed = formatNumber(progress.processed);
+            const imported = formatNumber(progress.imported);
+            
+            progressDetails.innerHTML = `
+              <strong style="color: #46b450;">✓ Completed!</strong><br>
+              <strong>Total processed:</strong> ${processed} events<br>
+              <strong>Total imported:</strong> ${imported} events
+            `;
             
             if (syncBtn) {
               syncBtn.disabled = false;
               syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
             }
             
-            // Clear progress after 5 seconds
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
+            
+            // Clear progress after 8 seconds
             setTimeout(() => {
               progressDiv.style.display = 'none';
-            }, 5000);
+              // Reload page to update the count
+              location.reload();
+            }, 8000);
           } else if (progress.status === 'error') {
             progressDiv.style.display = 'block';
-            progressMessage.textContent = progress.message || 'Sync failed!';
-            progressBar.style.background = '#dc3232';
-            progressStats.textContent = `Processed: ${progress.processed} / ${progress.total}`;
+            progressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+            progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+            
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            
+            progressDetails.innerHTML = `
+              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} events
+            `;
             
             if (syncBtn) {
               syncBtn.disabled = false;
               syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+            }
+            
+            if (progressInterval) {
+              clearTimeout(progressInterval);
             }
           } else {
             // No active sync, stop polling
             if (syncBtn) {
               syncBtn.disabled = false;
+            }
+            if (progressInterval) {
+              clearTimeout(progressInterval);
             }
           }
         } else {
@@ -810,28 +960,104 @@ function artly_reminder_bridge_render_admin_page(): void {
           if (syncBtn) {
             syncBtn.disabled = false;
           }
+          if (progressInterval) {
+            clearTimeout(progressInterval);
+          }
         }
       })
       .catch(error => {
         console.error('Error fetching progress:', error);
         if (syncBtn) {
           syncBtn.disabled = false;
+          syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+        }
+        if (progressInterval) {
+          clearTimeout(progressInterval);
         }
       });
     }
 
     if (syncBtn) {
-      syncBtn.addEventListener('click', function() {
-        this.disabled = true;
-        this.textContent = '<?php esc_html_e( 'Syncing...', 'artly-reminder-bridge' ); ?>';
-        progressDiv.style.display = 'block';
-        progressMessage.textContent = 'Starting sync...';
-        progressBar.style.width = '0%';
-        progressBar.style.background = '#2271b1';
-        progressStats.textContent = '';
+      syncBtn.addEventListener('click', function(e) {
+        e.preventDefault();
         
-        // Start polling after a short delay
-        setTimeout(updateProgress, 500);
+        // Get total count first
+        fetch(ajaxurl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            action: 'artly_get_points_count',
+            _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
+          }),
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success && data.data) {
+            totalToSync = data.data.total;
+            
+            // Show progress immediately
+            progressDiv.style.display = 'block';
+            progressMessage.textContent = 'Initializing sync...';
+            progressBar.style.width = '0%';
+            progressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+            progressPercentage.textContent = '0%';
+            progressDetails.innerHTML = `
+              <strong>Total to sync:</strong> ${formatNumber(totalToSync)} events<br>
+              <strong>Status:</strong> Starting...
+            `;
+            
+            // Disable button
+            syncBtn.disabled = true;
+            syncBtn.textContent = 'Syncing...';
+            
+            // Start the sync via AJAX
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_start_sync_points',
+                _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
+              }),
+            })
+            .then(response => response.json())
+            .then(data => {
+              // Start polling for progress
+              setTimeout(updateProgress, 500);
+            })
+            .catch(error => {
+              console.error('Error starting sync:', error);
+              progressMessage.textContent = '❌ Error starting sync. Please try again.';
+              syncBtn.disabled = false;
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points & Points Logs', 'artly-reminder-bridge' ); ?>';
+            });
+          }
+        })
+        .catch(error => {
+          console.error('Error getting count:', error);
+          // Still try to start sync
+          progressDiv.style.display = 'block';
+          progressMessage.textContent = 'Starting sync...';
+          syncBtn.disabled = true;
+          syncBtn.textContent = 'Syncing...';
+          
+          fetch(ajaxurl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              action: 'artly_start_sync_points',
+              _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
+            }),
+          })
+          .then(() => {
+            setTimeout(updateProgress, 500);
+          });
+        });
       });
     }
 
