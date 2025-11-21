@@ -517,19 +517,23 @@ const Dashboard: React.FC = () => {
   const handleSyncFromWordPress = async () => {
     setIsSyncingFromWordPress(true);
     setError(null);
+    setSuccessMessage(null);
     try {
       const response = await apiFetch<{ success: boolean; message: string; created: number; updated: number; total: number }>('/api/subscribers/sync-from-artly', {
         method: 'POST',
       });
       
-      setSuccessMessage(response.message || `Synced ${response.created} new and ${response.updated} existing subscribers from WordPress.`);
-      setTimeout(() => setSuccessMessage(null), 5000);
+      const message = response.message || `Successfully synced ${response.created} new and ${response.updated} existing subscribers from WordPress.`;
+      setSuccessMessage(message);
+      setTimeout(() => setSuccessMessage(null), 8000);
       
       // Refresh subscribers list
       await refreshSubscribersAndStats();
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Failed to sync subscribers from WordPress. Make sure you have synced customers from WordPress first.');
+      const errorMessage = err.message || 'Failed to sync subscribers from WordPress. Make sure you have synced customers from WordPress first.';
+      setError(errorMessage);
+      setTimeout(() => setError(null), 8000);
     } finally {
       setIsSyncingFromWordPress(false);
     }
@@ -724,13 +728,21 @@ const Dashboard: React.FC = () => {
               </div>
             )}
             {error && (
-              <div className="flex items-center gap-2 bg-red-50 border border-red-100 text-red-700 px-4 py-3 rounded-xl">
-                <i className="fas fa-exclamation-triangle"></i> {error}
+              <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl shadow-sm animate-fade-in-up">
+                <i className="fas fa-exclamation-triangle text-red-500"></i> 
+                <span className="font-medium">{error}</span>
               </div>
             )}
             {successMessage && (
-              <div className="flex items-center gap-2 bg-green-50 border border-green-100 text-green-700 px-4 py-3 rounded-xl">
-                <i className="fas fa-check-circle"></i> {successMessage}
+              <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl shadow-sm animate-fade-in-up">
+                <i className="fas fa-check-circle text-green-500"></i> 
+                <span className="font-medium">{successMessage}</span>
+              </div>
+            )}
+            {isSyncingFromWordPress && activeTab === 'subscribers' && (
+              <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-xl shadow-sm animate-pulse">
+                <i className="fas fa-spinner fa-spin text-blue-500"></i> 
+                <span className="font-medium">Syncing subscribers from WordPress... Please wait.</span>
               </div>
             )}
           </div>
@@ -1078,15 +1090,21 @@ const SubscribersTab = ({
         <button 
           onClick={onSyncFromWordPress} 
           disabled={isSyncingFromWordPress}
-          className="bg-primary text-white px-6 py-3 rounded-xl hover:bg-indigo-600 shadow-lg shadow-primary/30 flex items-center gap-2 font-bold transition-all transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+          className={`px-6 py-3 rounded-xl shadow-lg flex items-center gap-2 font-bold transition-all ${
+            isSyncingFromWordPress
+              ? 'bg-indigo-400 text-white cursor-wait shadow-indigo-400/30'
+              : 'bg-primary text-white hover:bg-indigo-600 shadow-primary/30 transform hover:-translate-y-1'
+          } disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none`}
         >
           {isSyncingFromWordPress ? (
             <>
-              <i className="fas fa-spinner fa-spin"></i> Syncing...
+              <i className="fas fa-spinner fa-spin text-lg"></i> 
+              <span>Syncing from WordPress...</span>
             </>
           ) : (
             <>
-              <i className="fas fa-sync-alt"></i> Sync from WordPress
+              <i className="fas fa-sync-alt"></i> 
+              <span>Sync from WordPress</span>
             </>
           )}
         </button>
