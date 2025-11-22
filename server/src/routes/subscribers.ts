@@ -59,51 +59,35 @@ subscriberRouter.get('/api/subscribers', async (req, res, next) => {
   }
 });
 
-subscriberRouter.get('/api/subscribers/:id', async (req, res, next) => {
+// IMPORTANT: These specific routes must come BEFORE /api/subscribers/:id
+// Otherwise Express will match "sync-progress", "sync-from-artly", etc. as :id parameters
+
+// Get sync progress
+subscriberRouter.get('/api/subscribers/sync-progress', async (req, res, next) => {
   try {
-    const subscriber = await getSubscriber(req.params.id);
-    if (!subscriber) {
-      return res.status(404).json({ message: 'Subscriber not found' });
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
     }
-    res.json(subscriber);
-  } catch (error) {
-    next(error);
-  }
-});
 
-subscriberRouter.post('/api/subscribers', async (req, res, next) => {
-  try {
-    const subscriber = await createSubscriber(req.body);
-    res.status(201).json(subscriber);
-  } catch (error) {
-    next(error);
-  }
-});
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
 
-subscriberRouter.put('/api/subscribers/:id', async (req, res, next) => {
-  try {
-    const subscriber = await updateSubscriber(req.params.id, req.body);
-    res.json(subscriber);
-  } catch (error) {
-    next(error);
-  }
-});
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
 
-subscriberRouter.delete('/api/subscribers/:id', async (req, res, next) => {
-  try {
-    const subscriber = await cancelSubscriber(req.params.id);
-    res.json(subscriber);
-  } catch (error) {
-    next(error);
-  }
-});
+    const progress = getSyncProgress(workspaceUser.workspaceId);
+    
+    if (!progress) {
+      return res.json({
+        status: 'idle',
+        message: 'No sync in progress',
+      });
+    }
 
-subscriberRouter.post('/api/subscribers/import', async (req, res, next) => {
-  try {
-    const schema = z.object({ subscribers: z.array(z.any()) });
-    const { subscribers } = schema.parse(req.body);
-    const summary = await importSubscribers(subscribers as any);
-    res.json(summary);
+    res.json(progress);
   } catch (error) {
     next(error);
   }
@@ -148,33 +132,53 @@ subscriberRouter.post('/api/subscribers/sync-from-artly', async (req, res, next)
   }
 });
 
-// Get sync progress
-subscriberRouter.get('/api/subscribers/sync-progress', async (req, res, next) => {
+subscriberRouter.post('/api/subscribers/import', async (req, res, next) => {
   try {
-    const user = (req as any).user;
-    if (!user || !user.id) {
-      return res.status(401).json({ message: 'User not authenticated' });
-    }
-
-    const workspaceUser = await prisma.workspaceUser.findFirst({
-      where: { userId: user.id },
-    });
-
-    if (!workspaceUser) {
-      return res.status(404).json({ message: 'Workspace not found for user' });
-    }
-
-    const progress = getSyncProgress(workspaceUser.workspaceId);
-    
-    if (!progress) {
-      return res.json({
-        status: 'idle',
-        message: 'No sync in progress',
-      });
-    }
-
-    res.json(progress);
+    const schema = z.object({ subscribers: z.array(z.any()) });
+    const { subscribers } = schema.parse(req.body);
+    const summary = await importSubscribers(subscribers as any);
+    res.json(summary);
   } catch (error) {
     next(error);
   }
 });
+
+subscriberRouter.get('/api/subscribers/:id', async (req, res, next) => {
+  try {
+    const subscriber = await getSubscriber(req.params.id);
+    if (!subscriber) {
+      return res.status(404).json({ message: 'Subscriber not found' });
+    }
+    res.json(subscriber);
+  } catch (error) {
+    next(error);
+  }
+});
+
+subscriberRouter.post('/api/subscribers', async (req, res, next) => {
+  try {
+    const subscriber = await createSubscriber(req.body);
+    res.status(201).json(subscriber);
+  } catch (error) {
+    next(error);
+  }
+});
+
+subscriberRouter.put('/api/subscribers/:id', async (req, res, next) => {
+  try {
+    const subscriber = await updateSubscriber(req.params.id, req.body);
+    res.json(subscriber);
+  } catch (error) {
+    next(error);
+  }
+});
+
+subscriberRouter.delete('/api/subscribers/:id', async (req, res, next) => {
+  try {
+    const subscriber = await cancelSubscriber(req.params.id);
+    res.json(subscriber);
+  } catch (error) {
+    next(error);
+  }
+});
+
