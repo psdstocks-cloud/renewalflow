@@ -1004,190 +1004,451 @@ function artly_reminder_bridge_render_admin_page(): void {
   }
   $expected_batches = $total_users > 0 ? ceil( $total_users / $expected_batch_size ) : 0;
   ?>
-  <div class="wrap">
-    <h1><?php esc_html_e( 'Artly Reminder Sync', 'artly-reminder-bridge' ); ?></h1>
-    <?php if ( $message ) : ?>
-      <div class="notice notice-success"><p><?php echo wp_kses_post( $message ); ?></p></div>
-    <?php endif; ?>
-    <table class="widefat" style="max-width: 700px; margin-top: 10px;">
-      <tbody>
-        <tr>
-          <th><?php esc_html_e( 'WordPress Users', 'artly-reminder-bridge' ); ?></th>
-          <td><strong><?php echo esc_html( $total_users ); ?></strong> total users</td>
-        </tr>
-        <tr>
-          <th><?php esc_html_e( 'Sync Strategy', 'artly-reminder-bridge' ); ?></th>
-          <td>
-            <?php if ( $total_users > 0 ) : ?>
-              Batch size: <strong><?php echo esc_html( $expected_batch_size ); ?></strong> users per batch<br>
-              Expected batches: <strong><?php echo esc_html( $expected_batches ); ?></strong>
-            <?php else : ?>
-              No users to sync
-            <?php endif; ?>
-          </td>
-        </tr>
-        <tr>
-          <th><?php esc_html_e( 'Last Woo Points Log ID', 'artly-reminder-bridge' ); ?></th>
-          <td><?php echo esc_html( (string) $last_id ); ?></td>
-        </tr>
-        <tr>
-          <th><?php esc_html_e( 'Last Sync Time (UTC)', 'artly-reminder-bridge' ); ?></th>
-          <td><?php echo esc_html( $last_sync ? $last_sync : __( 'Never', 'artly-reminder-bridge' ) ); ?></td>
-        </tr>
-        <tr>
-          <th><?php esc_html_e( 'Connection Status', 'artly-reminder-bridge' ); ?></th>
-          <td>
-            <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
-              <span style="color: green;">✅ Configured</span>
-            <?php else : ?>
-              <span style="color: red;">❌ Not configured</span>
-            <?php endif; ?>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <form method="post" style="max-width: 700px; margin-top: 20px;">
-      <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
-      <div class="notice notice-info" style="max-width: 700px; margin: 20px 0;">
-        <p><strong><?php esc_html_e( 'How to get your API key:', 'artly-reminder-bridge' ); ?></strong></p>
-        <ol>
-          <li><?php esc_html_e( 'Log in to your RenewalFlow dashboard at', 'artly-reminder-bridge' ); ?> <a href="https://renewalflow.pages.dev" target="_blank">https://renewalflow.pages.dev</a></li>
-          <li><?php esc_html_e( 'Go to the "Integrations" tab', 'artly-reminder-bridge' ); ?></li>
-          <li><?php esc_html_e( 'Add your website URL and click "Connect Website"', 'artly-reminder-bridge' ); ?></li>
-          <li><?php esc_html_e( 'Copy the generated API key and paste it below', 'artly-reminder-bridge' ); ?></li>
-        </ol>
+  <div class="artly-reminder-wrap">
+    <div class="artly-reminder-header">
+      <div>
+        <div class="artly-reminder-header__title"><?php esc_html_e( 'Artly Reminder Sync', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-header__subtitle"><?php esc_html_e( 'Bridge between your WooCommerce store and RenewalFlow reminder engine.', 'artly-reminder-bridge' ); ?></div>
       </div>
-      <table class="form-table">
-        <tr>
-          <th scope="row"><label for="artly_reminder_engine_url"><?php esc_html_e( 'RenewalFlow API Base URL', 'artly-reminder-bridge' ); ?></label></th>
-          <td>
-            <input name="artly_reminder_engine_url" type="url" id="artly_reminder_engine_url" class="regular-text" value="<?php echo esc_attr( $api_url ); ?>" placeholder="https://renewalflow-production.up.railway.app" required />
-            <p class="description"><?php esc_html_e( 'The base URL of your RenewalFlow backend (without /artly/sync/). Example: https://renewalflow-production.up.railway.app', 'artly-reminder-bridge' ); ?></p>
-          </td>
-        </tr>
-        <tr>
-          <th scope="row"><label for="artly_reminder_engine_secret"><?php esc_html_e( 'API Key', 'artly-reminder-bridge' ); ?></label></th>
-          <td>
-            <input name="artly_reminder_engine_secret" type="text" id="artly_reminder_engine_secret" class="regular-text code" value="<?php echo esc_attr( $api_secret ); ?>" placeholder="artly_workspaceId_..." required />
-            <p class="description"><?php esc_html_e( 'Copy this from your RenewalFlow dashboard → Integrations tab. It should start with "artly_"', 'artly-reminder-bridge' ); ?></p>
-          </td>
-        </tr>
-      </table>
-      <p class="submit">
-        <button type="submit" name="submit" class="button button-primary"><?php esc_html_e( 'Save settings', 'artly-reminder-bridge' ); ?></button>
-        <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
-          <button type="submit" name="artly_test_connection" value="1" class="button"><?php esc_html_e( 'Test Connection', 'artly-reminder-bridge' ); ?></button>
-        <?php endif; ?>
-      </p>
-    </form>
-    <div style="max-width: 700px; margin-top: 20px;">
-      <h2><?php esc_html_e( 'Manual Sync', 'artly-reminder-bridge' ); ?></h2>
-      <p><?php esc_html_e( 'Use these buttons to manually sync data from WooCommerce to the Reminder Engine:', 'artly-reminder-bridge' ); ?></p>
-      <form method="post" style="margin-top: 10px;">
-        <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
-        <p>
-          <button type="submit" name="artly_sync_users" value="1" class="button button-secondary"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
-          <span class="description">
-            <?php esc_html_e( 'Sync all WordPress users to the Reminder Engine', 'artly-reminder-bridge' ); ?> 
-            (<?php echo esc_html( $total_users ); ?> users, ~<?php echo esc_html( $expected_batches ); ?> batches)
-            <?php if ( $total_users > 100 ) : ?>
-              <br><em style="color: #666;"><?php esc_html_e( 'Note: Large syncs are processed in batches to prevent timeouts.', 'artly-reminder-bridge' ); ?></em>
-            <?php endif; ?>
-          </span>
-        </p>
-        <p>
-          <button type="button" class="button button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?></button>
-          <button type="button" class="button" id="artly-cancel-sync-btn" style="display: none; margin-left: 10px; background: #dc3232; color: white; border-color: #dc3232;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
-          <span class="description" id="artly-points-description">
-            <?php 
-            global $wpdb;
-            $total_users = 0;
-            if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
-              // Count users with points
-              if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
-                $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
-                $total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$table_name}" );
-              } else {
-                $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
-                $total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$log_table}" );
-              }
-            }
-            esc_html_e( 'Sync current points balances from WooCommerce Points & Rewards. Incremental changes are synced automatically every hour.', 'artly-reminder-bridge' );
-            if ( $total_users > 0 ) {
-              echo ' (' . esc_html( number_format( $total_users ) ) . ' users with points)';
-            }
-            ?>
-          </span>
-        </p>
-        <div id="artly-sync-progress" style="display: none; margin-top: 10px; padding: 15px; background: #f9f9f9; border-left: 4px solid #2271b1; max-width: 700px; border-radius: 4px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <p style="margin: 0; font-weight: bold; color: #2271b1;">
-              <i class="dashicons dashicons-update" style="animation: spin 1s linear infinite; display: inline-block; margin-right: 5px;"></i>
-              <?php esc_html_e( 'Sync Progress', 'artly-reminder-bridge' ); ?>
-            </p>
-          </div>
-          <div id="artly-progress-message" style="margin-bottom: 10px; color: #333; font-size: 14px;"></div>
-          <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; height: 24px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
-            <div id="artly-progress-bar" style="background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
-              <span id="artly-progress-percentage">0%</span>
-            </div>
-          </div>
-          <p id="artly-progress-stats" style="margin: 10px 0 0 0; font-size: 13px; color: #666; line-height: 1.6;">
-            <span id="artly-progress-details"></span>
-          </p>
-        </div>
-        <style>
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        </style>
-        <p>
-          <button type="button" class="button button-secondary" id="artly-sync-charges-btn"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
-          <button type="button" class="button" id="artly-cancel-charges-sync-btn" style="display: none; margin-left: 10px; background: #dc3232; color: white; border-color: #dc3232;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
-          <span class="description" id="artly-charges-description">
-            <?php 
-            $total_orders = 0;
-            if ( class_exists( 'WooCommerce' ) ) {
-              $orders = wc_get_orders(
-                array(
-                  'limit'  => -1,
-                  'status' => array( 'processing', 'completed', 'on-hold' ),
-                  'return' => 'ids',
-                )
-              );
-              $total_orders = count( $orders );
-            }
-            esc_html_e( 'Sync WooCommerce orders/charges to the Reminder Engine.', 'artly-reminder-bridge' );
-            if ( $total_orders > 0 ) {
-              echo ' (' . esc_html( number_format( $total_orders ) ) . ' orders)';
-            }
-            ?>
-          </span>
-        </p>
-        <div id="artly-charges-sync-progress" style="display: none; margin-top: 10px; padding: 15px; background: #f9f9f9; border-left: 4px solid #2271b1; max-width: 700px; border-radius: 4px; position: relative;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <p style="margin: 0; font-weight: bold; color: #2271b1;">
-              <i class="dashicons dashicons-update" style="animation: spin 1s linear infinite; display: inline-block; margin-right: 5px;"></i>
-              <?php esc_html_e( 'Charges Sync Progress', 'artly-reminder-bridge' ); ?>
-            </p>
-            <button type="button" id="artly-dismiss-charges-progress" style="display: none; background: transparent; border: none; color: #666; cursor: pointer; font-size: 18px; padding: 0; width: 24px; height: 24px; line-height: 1;" title="Dismiss">
-              <span style="font-size: 20px;">×</span>
-            </button>
-          </div>
-          <div id="artly-charges-progress-message" style="margin-bottom: 10px; color: #333; font-size: 14px;"></div>
-          <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; height: 24px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
-            <div id="artly-charges-progress-bar" style="background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
-              <span id="artly-charges-progress-percentage">0%</span>
-            </div>
-          </div>
-          <p id="artly-charges-progress-stats" style="margin: 10px 0 0 0; font-size: 13px; color: #666; line-height: 1.6;">
-            <span id="artly-charges-progress-details"></span>
-          </p>
-        </div>
-      </form>
+      <div class="artly-reminder-status-pill <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'is-connected' : 'is-disconnected'; ?>">
+        <span class="dashicons <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'dashicons-yes-alt' : 'dashicons-warning'; ?>"></span>
+        <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? esc_html__( 'Connected', 'artly-reminder-bridge' ) : esc_html__( 'Not configured', 'artly-reminder-bridge' ); ?>
+      </div>
     </div>
+
+    <?php if ( $message ) : ?>
+      <div class="artly-reminder-alert">
+        <?php echo wp_kses_post( $message ); ?>
+      </div>
+    <?php endif; ?>
+
+    <div class="artly-reminder-grid artly-reminder-grid--summary">
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-admin-users"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'WordPress Users', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( $total_users ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Synced into RenewalFlow engine.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-update"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Sync Strategy', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value">
+          <?php if ( $total_users > 0 ) : ?>
+            <?php printf( esc_html__( 'Batch size: %d users', 'artly-reminder-bridge' ), $expected_batch_size ); ?>
+          <?php else : ?>
+            <?php esc_html_e( 'No users to sync', 'artly-reminder-bridge' ); ?>
+          <?php endif; ?>
+        </div>
+        <p class="artly-reminder-card__desc"><?php printf( esc_html__( 'Expected batches: %d', 'artly-reminder-bridge' ), $expected_batches ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-awards"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Last Points Log ID', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( (string) $last_id ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Latest Woo Points entry processed.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-backup"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Last Sync Time (UTC)', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( $last_sync ? $last_sync : __( 'Never', 'artly-reminder-bridge' ) ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Auto-sync runs hourly.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+    </div>
+
+    <div class="artly-reminder-grid artly-reminder-grid--two">
+      <div class="artly-reminder-card artly-reminder-card--panel">
+        <div class="artly-reminder-card__header">
+          <div>
+            <div class="artly-reminder-card__title"><?php esc_html_e( 'Connection to RenewalFlow', 'artly-reminder-bridge' ); ?></div>
+            <p class="artly-reminder-card__desc"><?php esc_html_e( 'Configure your RenewalFlow base URL and API key to enable secure syncing.', 'artly-reminder-bridge' ); ?></p>
+          </div>
+        </div>
+        <form method="post" class="artly-reminder-form">
+          <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
+          <div class="artly-reminder-form-grid">
+            <div class="artly-reminder-form-group">
+              <label for="artly_reminder_engine_url"><?php esc_html_e( 'RenewalFlow API Base URL', 'artly-reminder-bridge' ); ?></label>
+              <input name="artly_reminder_engine_url" type="url" id="artly_reminder_engine_url" value="<?php echo esc_attr( $api_url ); ?>" placeholder="https://renewalflow-production.up.railway.app" required />
+              <p class="description"><?php esc_html_e( 'Example: https://renewalflow-production.up.railway.app', 'artly-reminder-bridge' ); ?></p>
+            </div>
+            <div class="artly-reminder-form-group">
+              <label for="artly_reminder_engine_secret"><?php esc_html_e( 'API Key', 'artly-reminder-bridge' ); ?></label>
+              <input name="artly_reminder_engine_secret" type="password" id="artly_reminder_engine_secret" value="<?php echo esc_attr( $api_secret ); ?>" placeholder="artly_workspaceId_..." required />
+              <p class="description"><?php esc_html_e( 'Copy this from your RenewalFlow dashboard → Integrations tab. It should start with "artly_".', 'artly-reminder-bridge' ); ?></p>
+            </div>
+          </div>
+          <div class="artly-reminder-actions">
+            <button type="submit" name="submit" class="button artly-reminder-button-primary"><?php esc_html_e( 'Save settings', 'artly-reminder-bridge' ); ?></button>
+            <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
+              <button type="submit" name="artly_test_connection" value="1" class="button artly-reminder-button-secondary"><?php esc_html_e( 'Test Connection', 'artly-reminder-bridge' ); ?></button>
+              <span class="artly-reminder-inline-status <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'is-connected' : 'is-disconnected'; ?>">
+                <span class="dashicons <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'dashicons-yes' : 'dashicons-dismiss'; ?>"></span>
+                <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? esc_html__( 'Ready to connect', 'artly-reminder-bridge' ) : esc_html__( 'Missing credentials', 'artly-reminder-bridge' ); ?>
+              </span>
+            <?php endif; ?>
+          </div>
+        </form>
+      </div>
+
+      <div class="artly-reminder-card artly-reminder-card--panel">
+        <div class="artly-reminder-card__header">
+          <div>
+            <div class="artly-reminder-card__title"><?php esc_html_e( 'Manual Sync Tools', 'artly-reminder-bridge' ); ?></div>
+            <p class="artly-reminder-card__desc"><?php esc_html_e( 'Use these tools to trigger a one-time sync with RenewalFlow. Large syncs are processed in batches.', 'artly-reminder-bridge' ); ?></p>
+          </div>
+        </div>
+        <form method="post" class="artly-reminder-manual-form">
+          <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
+          <div class="artly-reminder-manual-grid">
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></div>
+                <p><?php esc_html_e( 'Sync all WordPress users to the Reminder Engine.', 'artly-reminder-bridge' ); ?> (<?php echo esc_html( $total_users ); ?> <?php esc_html_e( 'users', 'artly-reminder-bridge' ); ?>, ~<?php echo esc_html( $expected_batches ); ?> <?php esc_html_e( 'batches', 'artly-reminder-bridge' ); ?>)</p>
+              </div>
+              <button type="submit" name="artly_sync_users" value="1" class="button artly-reminder-button-secondary"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
+            </div>
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?></div>
+                <p id="artly-points-description">
+                  <?php
+                  global $wpdb;
+                  $points_total_users = 0;
+                  if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+                    if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
+                      $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+                      $points_total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$table_name}" );
+                    } else {
+                      $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+                      $points_total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$log_table}" );
+                    }
+                  }
+                  esc_html_e( 'Push current WooCommerce points to RenewalFlow.', 'artly-reminder-bridge' );
+                  if ( $points_total_users > 0 ) {
+                    echo ' (' . esc_html( number_format( $points_total_users ) ) . ' users with points)';
+                  }
+                  ?>
+                </p>
+              </div>
+              <div class="artly-reminder-button-group">
+                <button type="button" class="button artly-reminder-button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?></button>
+                <button type="button" class="button artly-reminder-button-danger" id="artly-cancel-sync-btn" style="display: none;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+              </div>
+            </div>
+            <div id="artly-sync-progress" class="artly-reminder-progress" style="display: none;">
+              <div class="artly-reminder-progress__header">
+                <p>
+                  <i class="dashicons dashicons-update"></i>
+                  <?php esc_html_e( 'Sync Progress', 'artly-reminder-bridge' ); ?>
+                </p>
+              </div>
+              <div id="artly-progress-message" class="artly-reminder-progress__message"></div>
+              <div class="artly-reminder-progress__bar">
+                <div id="artly-progress-bar" class="artly-reminder-progress__fill"><span id="artly-progress-percentage">0%</span></div>
+              </div>
+              <p id="artly-progress-stats" class="artly-reminder-progress__stats"><span id="artly-progress-details"></span></p>
+            </div>
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Charges / Orders', 'artly-reminder-bridge' ); ?></div>
+                <p id="artly-charges-description">
+                  <?php
+                  $total_orders = 0;
+                  if ( class_exists( 'WooCommerce' ) ) {
+                    $orders = wc_get_orders(
+                      array(
+                        'limit'  => -1,
+                        'status' => array( 'processing', 'completed', 'on-hold' ),
+                        'return' => 'ids',
+                      )
+                    );
+                    $total_orders = count( $orders );
+                  }
+                  esc_html_e( 'Sync WooCommerce orders used for renewals.', 'artly-reminder-bridge' );
+                  if ( $total_orders > 0 ) {
+                    echo ' (' . esc_html( number_format( $total_orders ) ) . ' orders)';
+                  }
+                  ?>
+                </p>
+              </div>
+              <div class="artly-reminder-button-group">
+                <button type="button" class="button artly-reminder-button-secondary" id="artly-sync-charges-btn"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
+                <button type="button" class="button artly-reminder-button-danger" id="artly-cancel-charges-sync-btn" style="display: none;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+              </div>
+            </div>
+            <div id="artly-charges-sync-progress" class="artly-reminder-progress" style="display: none;">
+              <div class="artly-reminder-progress__header">
+                <p>
+                  <i class="dashicons dashicons-update"></i>
+                  <?php esc_html_e( 'Charges Sync Progress', 'artly-reminder-bridge' ); ?>
+                </p>
+                <button type="button" id="artly-dismiss-charges-progress" class="artly-reminder-dismiss" style="display: none;">×</button>
+              </div>
+              <div id="artly-charges-progress-message" class="artly-reminder-progress__message"></div>
+              <div class="artly-reminder-progress__bar">
+                <div id="artly-charges-progress-bar" class="artly-reminder-progress__fill"><span id="artly-charges-progress-percentage">0%</span></div>
+              </div>
+              <p id="artly-charges-progress-stats" class="artly-reminder-progress__stats"><span id="artly-charges-progress-details"></span></p>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <p class="artly-reminder-footer"><?php esc_html_e( 'Tip: You can view detailed sync logs from the RenewalFlow dashboard.', 'artly-reminder-bridge' ); ?></p>
   </div>
+  <style>
+    .artly-reminder-wrap {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      color: #0f172a;
+    }
+    .artly-reminder-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(90deg, #4f46e5 0%, #6366f1 100%);
+      color: #fff;
+      padding: 18px 22px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.25);
+    }
+    .artly-reminder-header__title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .artly-reminder-header__subtitle {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    .artly-reminder-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-weight: 600;
+      background: #f97316;
+      color: #fff;
+    }
+    .artly-reminder-status-pill.is-connected {
+      background: #16a34a;
+    }
+    .artly-reminder-grid {
+      display: grid;
+      gap: 16px;
+    }
+    .artly-reminder-grid--summary {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 20px;
+    }
+    .artly-reminder-grid--two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 16px;
+    }
+    @media (max-width: 1100px) {
+      .artly-reminder-grid--summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .artly-reminder-grid--two { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 700px) {
+      .artly-reminder-grid--summary { grid-template-columns: 1fr; }
+    }
+    .artly-reminder-card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .artly-reminder-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 25px rgba(15, 23, 42, 0.12);
+    }
+    .artly-reminder-card__icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #4f46e5;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      margin-bottom: 12px;
+      font-size: 18px;
+    }
+    .artly-reminder-card__title {
+      font-weight: 700;
+      font-size: 16px;
+      margin-bottom: 6px;
+      color: #111827;
+    }
+    .artly-reminder-card__value {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: #111827;
+    }
+    .artly-reminder-card__desc {
+      margin: 0;
+      color: #6b7280;
+      font-size: 13px;
+    }
+    .artly-reminder-card--panel {
+      padding: 18px;
+    }
+    .artly-reminder-card__header { margin-bottom: 10px; }
+    .artly-reminder-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      .artly-reminder-form-grid { grid-template-columns: 1fr; }
+    }
+    .artly-reminder-form-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .artly-reminder-form-group input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .artly-reminder-form-group .description {
+      color: #6b7280;
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    .artly-reminder-actions {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .artly-reminder-button-primary {
+      background: #4f46e5 !important;
+      border-color: #4f46e5 !important;
+      color: #fff !important;
+      box-shadow: 0 8px 14px rgba(79, 70, 229, 0.25);
+    }
+    .artly-reminder-button-secondary {
+      background: #eef2ff !important;
+      border-color: #c7d2fe !important;
+      color: #312e81 !important;
+    }
+    .artly-reminder-button-danger {
+      background: #dc2626 !important;
+      border-color: #dc2626 !important;
+      color: #fff !important;
+    }
+    .artly-reminder-inline-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+    .artly-reminder-inline-status.is-connected {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .artly-reminder-manual-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .artly-reminder-manual-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .artly-reminder-manual-title { font-weight: 700; margin-bottom: 4px; }
+    .artly-reminder-manual-text p { margin: 0; color: #475569; }
+    .artly-reminder-button-group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .artly-reminder-progress {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .artly-reminder-progress__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      color: #4f46e5;
+      font-weight: 700;
+    }
+    .artly-reminder-progress__header .dashicons-update {
+      margin-right: 6px;
+      animation: spin 1s linear infinite;
+    }
+    .artly-reminder-progress__message { margin-bottom: 8px; color: #0f172a; }
+    .artly-reminder-progress__bar {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      height: 26px;
+      overflow: hidden;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .artly-reminder-progress__fill {
+      background: linear-gradient(90deg, #6366f1 0%, #4f46e5 100%);
+      height: 100%;
+      width: 0%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 700;
+      transition: width 0.5s ease;
+    }
+    .artly-reminder-progress__stats {
+      margin: 8px 0 0 0;
+      color: #475569;
+      font-size: 13px;
+    }
+    .artly-reminder-dismiss {
+      background: transparent;
+      border: none;
+      color: #475569;
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .artly-reminder-alert {
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #ecfeff;
+      border: 1px solid #bae6fd;
+      color: #0ea5e9;
+      font-weight: 600;
+    }
+    .artly-reminder-footer {
+      color: #94a3b8;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  </style>
   <script>
   (function() {
     const syncBtn = document.getElementById('artly-sync-points-btn');
