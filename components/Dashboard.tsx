@@ -1356,6 +1356,7 @@ const SubscribersTab = ({
               <th className="px-8 py-5">Status</th>
               <th className="px-8 py-5">Plan / Amount</th>
               <th className="px-8 py-5">Points / Payment</th>
+              <th className="px-8 py-5">Last Purchase</th>
               <th className="px-8 py-5">End Date</th>
               <th className="px-8 py-5 text-right">Actions</th>
             </tr>
@@ -1364,6 +1365,46 @@ const SubscribersTab = ({
             {subscribers.map((sub) => {
               const daysUntilExpiry = Math.ceil((new Date(sub.endDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
               const isExpiringSoon = sub.status === 'ACTIVE' && daysUntilExpiry <= reminderConfig.firstReminderDays && daysUntilExpiry > 0;
+              
+              // Format last purchase date with relative time (similar to WooCommerce Points & Rewards)
+              const formatLastPurchase = (date: string | null | undefined) => {
+                if (!date) return <span className="text-gray-400 italic">Never purchased</span>;
+                const purchaseDate = new Date(date);
+                const now = new Date();
+                const diffMs = now.getTime() - purchaseDate.getTime();
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+                const diffWeeks = Math.floor(diffDays / 7);
+                const diffMonths = Math.floor(diffDays / 30);
+                
+                let relativeTime = '';
+                if (diffMins < 1) {
+                  relativeTime = 'just now';
+                } else if (diffMins < 60) {
+                  relativeTime = `${diffMins} ${diffMins === 1 ? 'minute' : 'minutes'} ago`;
+                } else if (diffHours < 24) {
+                  relativeTime = `${diffHours} ${diffHours === 1 ? 'hour' : 'hours'} ago`;
+                } else if (diffDays < 7) {
+                  relativeTime = `${diffDays} ${diffDays === 1 ? 'day' : 'days'} ago`;
+                } else if (diffWeeks < 4) {
+                  relativeTime = `${diffWeeks} ${diffWeeks === 1 ? 'week' : 'weeks'} ago`;
+                } else if (diffMonths < 12) {
+                  relativeTime = `${diffMonths} ${diffMonths === 1 ? 'month' : 'months'} ago`;
+                } else {
+                  relativeTime = purchaseDate.toLocaleDateString();
+                }
+                
+                return (
+                  <div>
+                    <div className="text-sm text-gray-600 font-medium">
+                      <span className="text-gray-500">Last purchase:</span> {relativeTime}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">{purchaseDate.toLocaleDateString()} {purchaseDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                  </div>
+                );
+              };
+              
               return (
                 <tr key={sub.id} className="hover:bg-blue-50/30 transition-colors group">
                   <td className="px-8 py-5">
@@ -1396,6 +1437,9 @@ const SubscribersTab = ({
                       </a>
                     )}
                   </td>
+                  <td className="px-8 py-5">
+                    {formatLastPurchase((sub as any).lastPurchaseDate)}
+                  </td>
                   <td className="px-8 py-5 text-gray-600 text-sm font-medium">{new Date(sub.endDate).toLocaleDateString()}</td>
                   <td className="px-8 py-5 text-right flex justify-end gap-2">
                     <button onClick={() => onEdit(sub)} className="w-8 h-8 rounded-full bg-gray-100 text-gray-400 hover:bg-blue-100 hover:text-blue-500 transition-all flex items-center justify-center" title="Edit">
@@ -1410,7 +1454,7 @@ const SubscribersTab = ({
             })}
             {subscribers.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-12 text-center text-gray-400">
+                <td colSpan={7} className="p-12 text-center text-gray-400">
                   <i className="fas fa-folder-open text-4xl mb-4 opacity-30"></i>
                   <p>No subscribers found. Import a CSV to get started.</p>
                 </td>

@@ -167,6 +167,7 @@ model Subscriber {
   endDate         DateTime
   paymentLink     String?
   lastNotifiedAt  DateTime?
+  lastPurchaseDate DateTime?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   emailLogs       EmailLog[]

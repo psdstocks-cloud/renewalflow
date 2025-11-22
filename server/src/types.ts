@@ -14,6 +14,7 @@ export interface Subscriber {
   endDate: string;
   paymentLink?: string;
   lastNotifiedAt?: string | null;
+  lastPurchaseDate?: string | null;
   createdAt: string;
   updatedAt: string;
 }

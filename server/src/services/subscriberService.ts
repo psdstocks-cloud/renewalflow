@@ -16,7 +16,8 @@ const subscriberSchema = z.object({
   status: z.string(),
   startDate: z.coerce.date(),
   endDate: z.coerce.date(),
-  paymentLink: z.string().optional()
+  paymentLink: z.string().optional(),
+  lastPurchaseDate: z.coerce.date().optional()
 });
 
 export type SubscriberInput = z.infer<typeof subscriberSchema>;
@@ -195,6 +196,23 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
     const walletSnapshot = customer.walletSnapshots[0];
     const pointsRemaining = walletSnapshot?.pointsBalance ?? 0;
 
+    // Get last purchase date from PointsTransaction (purchase or charge)
+    // This captures both points purchases and order charges
+    const lastPurchaseTransaction = await prisma.pointsTransaction.findFirst({
+      where: {
+        tenantId,
+        customerId: customer.id,
+        type: {
+          in: ['purchase', 'charge']
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    const lastPurchaseDate = lastPurchaseTransaction?.createdAt || null;
+
     // Determine subscriber status from subscription
     let status = 'ACTIVE';
     let startDate = new Date();
@@ -224,6 +242,12 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
       }
     }
 
+    // If we have a last purchase date, calculate endDate as 30 days from last purchase
+    if (lastPurchaseDate) {
+      endDate = addDays(lastPurchaseDate, 30);
+      startDate = lastPurchaseDate;
+    }
+
     // Create name from email (or use email as name)
     const name = customer.email.split('@')[0] || customer.email;
 
@@ -243,7 +267,8 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
       status,
       startDate,
       endDate,
-      paymentLink: undefined
+      paymentLink: undefined,
+      lastPurchaseDate: lastPurchaseDate || undefined
     };
 
     if (existing) {
