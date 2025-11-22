@@ -187,31 +187,57 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
   let updated = 0;
   const wsId = workspaceId || await getDefaultWorkspaceId();
 
+  // Batch fetch all last purchase dates at once for better performance
+  const customerIds = customers.map(c => c.id);
+  const lastPurchaseTransactions = await prisma.pointsTransaction.findMany({
+    where: {
+      tenantId,
+      customerId: { in: customerIds },
+      type: {
+        in: ['purchase', 'charge']
+      }
+    },
+    orderBy: {
+      createdAt: 'desc'
+    },
+    // Fetch transactions, we'll dedupe to get most recent per customer in memory
+    take: customerIds.length * 5, // Reasonable limit
+  });
+
+  // Create a map for quick lookup
+  const lastPurchaseMap = new Map<bigint, Date>();
+  for (const transaction of lastPurchaseTransactions) {
+    const existing = lastPurchaseMap.get(transaction.customerId);
+    if (!existing || transaction.createdAt > existing) {
+      lastPurchaseMap.set(transaction.customerId, transaction.createdAt);
+    }
+  }
+
+  // Batch fetch all existing subscribers to avoid N+1 queries
+  const customerEmails = customers.map(c => c.email);
+  const existingSubscribers = await prisma.subscriber.findMany({
+    where: {
+      email: { in: customerEmails },
+      workspaceId: wsId,
+    }
+  });
+  const existingSubscribersMap = new Map<string, typeof existingSubscribers[0]>();
+  for (const sub of existingSubscribers) {
+    existingSubscribersMap.set(sub.email, sub);
+  }
+
   for (let i = 0; i < customers.length; i++) {
     const customer = customers[i];
-    // Get the most recent active subscription or use defaults
-    const subscription = customer.subscriptions[0];
-    
-    // Get points balance
-    const walletSnapshot = customer.walletSnapshots[0];
-    const pointsRemaining = walletSnapshot?.pointsBalance ?? 0;
+    try {
+      // Get the most recent active subscription or use defaults
+      const subscription = customer.subscriptions[0];
+      
+      // Get points balance
+      const walletSnapshot = customer.walletSnapshots[0];
+      const pointsRemaining = walletSnapshot?.pointsBalance ?? 0;
 
-    // Get last purchase date from PointsTransaction (purchase or charge)
-    // This captures both points purchases and order charges
-    const lastPurchaseTransaction = await prisma.pointsTransaction.findFirst({
-      where: {
-        tenantId,
-        customerId: customer.id,
-        type: {
-          in: ['purchase', 'charge']
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
-
-    const lastPurchaseDate = lastPurchaseTransaction?.createdAt || null;
+      // Get last purchase date from map (much faster than individual queries)
+      const lastPurchaseDate = lastPurchaseMap.get(customer.id) || null;
 
     // Determine subscriber status from subscription
     let status = 'ACTIVE';
@@ -248,58 +274,63 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
       startDate = lastPurchaseDate;
     }
 
-    // Create name from email (or use email as name)
-    const name = customer.email.split('@')[0] || customer.email;
+      // Create name from email (or use email as name)
+      const name = customer.email.split('@')[0] || customer.email;
 
-    // Check if subscriber already exists by email
-    const existing = await prisma.subscriber.findUnique({ 
-      where: { email: customer.email } 
-    });
+      // Check if subscriber already exists by email (from batch lookup)
+      const existing = existingSubscribersMap.get(customer.email);
 
-    const subscriberData = {
-      name,
-      email: customer.email,
-      phone: customer.phone || undefined,
-      planName,
-      amount,
-      currency,
-      pointsRemaining,
-      status,
-      startDate,
-      endDate,
-      paymentLink: undefined,
-      lastPurchaseDate: lastPurchaseDate || undefined
-    };
+      const subscriberData = {
+        name,
+        email: customer.email,
+        phone: customer.phone || undefined,
+        planName,
+        amount,
+        currency,
+        pointsRemaining,
+        status,
+        startDate,
+        endDate,
+        paymentLink: undefined,
+        lastPurchaseDate: lastPurchaseDate || undefined
+      };
 
-    if (existing) {
-      // Update existing subscriber
-      await prisma.subscriber.update({
-        where: { id: existing.id },
-        data: { ...subscriberData, workspaceId: wsId }
-      });
-      updated += 1;
-    } else {
-      // Create new subscriber
-      await prisma.subscriber.create({
-        data: { ...subscriberData, workspaceId: wsId }
-      });
-      created += 1;
+      if (existing) {
+        // Update existing subscriber
+        await prisma.subscriber.update({
+          where: { id: existing.id },
+          data: { ...subscriberData, workspaceId: wsId }
+        });
+        updated += 1;
+      } else {
+        // Create new subscriber
+        await prisma.subscriber.create({
+          data: { ...subscriberData, workspaceId: wsId }
+        });
+        created += 1;
+      }
+    } catch (error: any) {
+      // Log error but continue processing other customers
+      console.error(`[syncCustomersToSubscribers] Error processing customer ${customer.email}:`, error.message);
+      // Continue to next customer
     }
 
-    // Update progress
+    // Update progress every 10 customers or on last customer
     const processed = i + 1;
-    const progress = {
-      status: 'running' as const,
-      processed,
-      total,
-      created,
-      updated,
-      message: `Processed ${processed} of ${total} customers...`,
-      startTime,
-    };
-    syncProgressMap.set(workspaceId, progress);
-    if (updateProgress) {
-      updateProgress({ processed, total, created, updated });
+    if (processed % 10 === 0 || processed === customers.length) {
+      const progress = {
+        status: 'running' as const,
+        processed,
+        total,
+        created,
+        updated,
+        message: `Processed ${processed} of ${total} customers...`,
+        startTime,
+      };
+      syncProgressMap.set(workspaceId, progress);
+      if (updateProgress) {
+        updateProgress({ processed, total, created, updated });
+      }
     }
   }
 

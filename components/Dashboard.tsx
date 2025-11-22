@@ -564,8 +564,12 @@ const Dashboard: React.FC = () => {
       
       // Poll for progress
       const pollProgress = async () => {
-        const maxAttempts = 300; // 5 minutes max (300 * 1 second)
+        // Increased timeout: 30 minutes max (1800 * 1 second) for large syncs
+        // This allows for processing thousands of customers
+        const maxAttempts = 1800; // 30 minutes max
         let attempts = 0;
+        let consecutiveErrors = 0;
+        const maxConsecutiveErrors = 5; // Allow up to 5 consecutive errors before giving up
         
         const poll = async () => {
           try {
@@ -580,6 +584,7 @@ const Dashboard: React.FC = () => {
               endTime?: string;
             }>('/api/subscribers/sync-progress');
             
+            consecutiveErrors = 0; // Reset error counter on success
             setSyncProgress(progress);
             
             if (progress.status === 'completed') {
@@ -608,16 +613,32 @@ const Dashboard: React.FC = () => {
               }, 5000);
             } else if (progress.status === 'running' && attempts < maxAttempts) {
               attempts++;
+              // Continue polling even if we've been polling for a while
+              // The sync will continue in the background
               setTimeout(poll, 1000); // Poll every second
             } else if (attempts >= maxAttempts) {
-              setError('Sync timed out. Please try again.');
+              // Don't show error if sync is still running - just stop polling
+              // User can refresh the page to see current status
+              if (progress.status === 'running') {
+                setError('Sync is taking longer than expected. The sync will continue in the background. Please refresh the page to check progress.');
+              } else {
+                setError('Sync timed out. Please try again.');
+              }
               setIsSyncingFromWordPress(false);
-              setSyncProgress(null);
+              // Don't clear progress - let user see current state
             }
           } catch (err) {
             console.error('Error polling progress:', err);
-            setIsSyncingFromWordPress(false);
-            setSyncProgress(null);
+            consecutiveErrors++;
+            
+            // Only give up after multiple consecutive errors
+            if (consecutiveErrors >= maxConsecutiveErrors) {
+              setError('Unable to fetch sync progress. The sync may still be running in the background. Please refresh the page to check status.');
+              setIsSyncingFromWordPress(false);
+            } else {
+              // Retry after a short delay
+              setTimeout(poll, 2000);
+            }
           }
         };
         
