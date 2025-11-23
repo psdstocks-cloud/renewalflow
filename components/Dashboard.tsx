@@ -10,7 +10,6 @@ import {
   ReminderTask,
   Subscriber,
   SubscriberStats,
-  SubscribersResponse,
   SubscriptionStatus,
   WooSettings,
   WooSyncResult,
@@ -18,8 +17,9 @@ import {
 } from '@/src/types';
 import { apiFetch } from '@/src/services/apiClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/src/context/AuthContext';
+import { fetchSubscribers } from '@/src/services/subscribersService';
 
 interface SubscriberFormState {
   name: string;
@@ -69,13 +69,43 @@ const statusLabels: Record<SubscriptionStatus, string> = {
   CANCELLED: 'Cancelled',
 };
 
+type AdvancedSubscriberFilters = {
+  status?: string;
+  source?: string;
+  tag?: string;
+  nextRenewalFrom?: string;
+  nextRenewalTo?: string;
+  hasPhone?: boolean | undefined;
+};
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { signOut } = useAuth();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [subscribersTotal, setSubscribersTotal] = useState(0);
-  const [subscribersPage, setSubscribersPage] = useState(1);
-  const [subscribersPerPage] = useState(50);
+  const [subscribersPage, setSubscribersPage] = useState(Number(searchParams.get('page') || 1));
+  const [subscribersPerPage, setSubscribersPerPage] = useState(Number(searchParams.get('pageSize') || 25));
+  const [subscriberSearch, setSubscriberSearch] = useState(searchParams.get('q') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('q') || '');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue'>(
+    (searchParams.get('quick') as any) || 'all'
+  );
+  const [advancedFilters, setAdvancedFilters] = useState<AdvancedSubscriberFilters>({
+    status: searchParams.get('status') || undefined,
+    source: searchParams.get('source') || undefined,
+    tag: searchParams.get('tag') || undefined,
+    nextRenewalFrom: searchParams.get('nextRenewalFrom') || undefined,
+    nextRenewalTo: searchParams.get('nextRenewalTo') || undefined,
+    hasPhone:
+      searchParams.get('hasPhone') === null ? undefined : searchParams.get('hasPhone') === 'true' ? true : false,
+  });
+  const [subscribersSortBy, setSubscribersSortBy] = useState(searchParams.get('sortBy') || 'nextRenewalAt');
+  const [subscribersSortDir, setSubscribersSortDir] = useState<'asc' | 'desc'>(
+    (searchParams.get('sortDir') as 'asc' | 'desc') || 'asc'
+  );
+  const [isSubscriberListLoading, setIsSubscriberListLoading] = useState(false);
+  const [subscriberListError, setSubscriberListError] = useState<string | null>(null);
   const [subscriberStats, setSubscriberStats] = useState<SubscriberStats | null>(null);
   const [reminderTasks, setReminderTasks] = useState<ReminderTask[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
@@ -129,15 +159,109 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(subscriberSearch), 300);
+    return () => clearTimeout(timer);
+  }, [subscriberSearch]);
+
+  const derivedFilters = useMemo(() => {
+    let status = advancedFilters.status || undefined;
+    let nextRenewalFrom = advancedFilters.nextRenewalFrom || undefined;
+    let nextRenewalTo = advancedFilters.nextRenewalTo || undefined;
+    let expiringInDays: number | undefined;
+
+    switch (quickFilter) {
+      case 'active':
+        status = 'active';
+        break;
+      case 'expiring_7':
+        status = 'active';
+        expiringInDays = 7;
+        break;
+      case 'expiring_30':
+        status = 'active';
+        expiringInDays = 30;
+        break;
+      case 'overdue':
+        status = 'active';
+        nextRenewalTo = new Date().toISOString();
+        nextRenewalFrom = undefined;
+        expiringInDays = undefined;
+        break;
+      default:
+        break;
+    }
+
+    return { status, nextRenewalFrom, nextRenewalTo, expiringInDays };
+  }, [advancedFilters, quickFilter]);
+
+  const subscriberQuery = useMemo(
+    () => ({
+      q: debouncedSearch || undefined,
+      status: derivedFilters.status,
+      source: advancedFilters.source || undefined,
+      tag: advancedFilters.tag || undefined,
+      nextRenewalFrom: derivedFilters.nextRenewalFrom,
+      nextRenewalTo: derivedFilters.nextRenewalTo,
+      expiringInDays: derivedFilters.expiringInDays,
+      hasPhone: typeof advancedFilters.hasPhone === 'boolean' ? advancedFilters.hasPhone : undefined,
+      page: subscribersPage,
+      pageSize: subscribersPerPage,
+      sortBy: subscribersSortBy,
+      sortDir: subscribersSortDir,
+    }),
+    [advancedFilters, debouncedSearch, derivedFilters, subscribersPage, subscribersPerPage, subscribersSortBy, subscribersSortDir]
+  );
+
+  useEffect(() => {
+    setSubscribersPage(1);
+  }, [debouncedSearch, derivedFilters, advancedFilters, subscribersSortBy, subscribersSortDir]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (subscriberQuery.q) params.set('q', subscriberQuery.q);
+    if (subscriberQuery.status) params.set('status', subscriberQuery.status);
+    if (subscriberQuery.source) params.set('source', subscriberQuery.source);
+    if (subscriberQuery.tag) params.set('tag', subscriberQuery.tag);
+    if (subscriberQuery.nextRenewalFrom) params.set('nextRenewalFrom', subscriberQuery.nextRenewalFrom);
+    if (subscriberQuery.nextRenewalTo) params.set('nextRenewalTo', subscriberQuery.nextRenewalTo);
+    if (subscriberQuery.expiringInDays !== undefined) params.set('expiringInDays', String(subscriberQuery.expiringInDays));
+    if (subscriberQuery.hasPhone !== undefined) params.set('hasPhone', String(subscriberQuery.hasPhone));
+    params.set('page', String(subscribersPage));
+    params.set('pageSize', String(subscribersPerPage));
+    params.set('sortBy', subscribersSortBy);
+    params.set('sortDir', subscribersSortDir);
+    params.set('quick', quickFilter);
+    setSearchParams(params, { replace: true });
+  }, [subscriberQuery, subscribersPage, subscribersPerPage, subscribersSortBy, subscribersSortDir, quickFilter, setSearchParams]);
+
+  const loadSubscribers = async (pageOverride?: number) => {
+    const queryPage = pageOverride ?? subscribersPage;
+    setIsSubscriberListLoading(true);
+    setSubscriberListError(null);
+    try {
+      const response = await fetchSubscribers({ ...subscriberQuery, page: queryPage });
+      setSubscribers(response.data);
+      setSubscribersTotal(response.meta.totalItems);
+      setSubscribersPage(response.meta.page);
+      setSubscribersPerPage(response.meta.pageSize);
+    } catch (err) {
+      console.error(err);
+      setSubscriberListError('We couldn\'t load subscribers. Please try again.');
+    } finally {
+      setIsSubscriberListLoading(false);
+    }
+  };
+
+  useEffect(() => {
     loadInitialData();
     loadReminderTasks();
   }, []);
 
   useEffect(() => {
     if (activeTab === 'subscribers') {
-      loadSubscribersPage(subscribersPage);
+      loadSubscribers();
     }
-  }, [subscribersPage, activeTab]);
+  }, [activeTab, subscriberQuery]);
 
   const loadWebsiteConnections = async () => {
     setIsLoadingConnections(true);
@@ -235,10 +359,9 @@ const Dashboard: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const skip = (subscribersPage - 1) * subscribersPerPage;
       const [settingsRes, subscriberRes, statsRes, logsRes] = await Promise.all([
         apiFetch<AppSettings>('/api/settings'),
-        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
+        fetchSubscribers({ ...subscriberQuery, page: subscribersPage, pageSize: subscribersPerPage }),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
         apiFetch<EmailLog[]>('/api/reminders/logs?limit=100'),
       ]);
@@ -252,8 +375,10 @@ const Dashboard: React.FC = () => {
       setEmailTemplate(template);
       setWooSettings(woo);
       setAdminWhatsApp(whatsapp);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
+      setSubscribers(subscriberRes.data);
+      setSubscribersTotal(subscriberRes.meta.totalItems);
+      setSubscribersPage(subscriberRes.meta.page);
+      setSubscribersPerPage(subscriberRes.meta.pageSize);
       setSubscriberStats(statsRes);
       setEmailLogs(logsRes);
     } catch (err) {
@@ -266,13 +391,14 @@ const Dashboard: React.FC = () => {
 
   const refreshSubscribersAndStats = async () => {
     try {
-      const skip = (subscribersPage - 1) * subscribersPerPage;
       const [subscriberRes, statsRes] = await Promise.all([
-        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
+        fetchSubscribers({ ...subscriberQuery, page: subscribersPage, pageSize: subscribersPerPage }),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
       ]);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
+      setSubscribers(subscriberRes.data);
+      setSubscribersTotal(subscriberRes.meta.totalItems);
+      setSubscribersPage(subscriberRes.meta.page);
+      setSubscribersPerPage(subscriberRes.meta.pageSize);
       setSubscriberStats(statsRes);
     } catch (err) {
       console.error(err);
@@ -282,17 +408,7 @@ const Dashboard: React.FC = () => {
 
   const loadSubscribersPage = async (page: number) => {
     setSubscribersPage(page);
-    try {
-      const skip = (page - 1) * subscribersPerPage;
-      const subscriberRes = await apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
-      // Scroll to top of table
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (err) {
-      console.error(err);
-      setError('Unable to load subscribers.');
-    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const loadReminderTasks = async () => {
@@ -903,23 +1019,53 @@ const Dashboard: React.FC = () => {
         )}
 
         {activeTab === 'subscribers' && (
-          <SubscribersTab
-            subscribers={subscribers}
-            reminderConfig={reminderConfig}
-            onAdd={openAddModal}
-            onImport={() => setShowImportModal(true)}
-            onSyncFromWordPress={handleSyncFromWordPress}
-            isSyncingFromWordPress={isSyncingFromWordPress}
-            syncProgress={syncProgress}
+        <SubscribersTab
+          subscribers={subscribers}
+          reminderConfig={reminderConfig}
+          searchTerm={subscriberSearch}
+          onSearchChange={setSubscriberSearch}
+          quickFilter={quickFilter}
+          onQuickFilterChange={(filter) => {
+            setQuickFilter(filter);
+            setSubscribersPage(1);
+          }}
+          advancedFilters={advancedFilters}
+          onAdvancedFiltersChange={setAdvancedFilters}
+          onAdd={openAddModal}
+          onImport={() => setShowImportModal(true)}
+          onSyncFromWordPress={handleSyncFromWordPress}
+          isSyncingFromWordPress={isSyncingFromWordPress}
+          syncProgress={syncProgress}
             lastSyncTime={lastSyncTime}
             onEdit={openEditModal}
             onDelete={handleDeleteSub}
-            total={subscribersTotal}
-            currentPage={subscribersPage}
-            perPage={subscribersPerPage}
-            onPageChange={loadSubscribersPage}
-          />
-        )}
+          total={subscribersTotal}
+          currentPage={subscribersPage}
+          perPage={subscribersPerPage}
+          onPageChange={loadSubscribersPage}
+          sortBy={subscribersSortBy}
+          sortDir={subscribersSortDir}
+          onSortChange={(field, dir) => {
+            setSubscribersSortBy(field);
+            setSubscribersSortDir(dir);
+          }}
+          isLoading={isSubscriberListLoading}
+          error={subscriberListError}
+          onRetry={() => loadSubscribers(subscribersPage)}
+          onClearFilters={() => {
+            setSubscriberSearch('');
+            setQuickFilter('all');
+            setAdvancedFilters({
+              status: undefined,
+              source: undefined,
+              tag: undefined,
+              nextRenewalFrom: undefined,
+              nextRenewalTo: undefined,
+              hasPhone: undefined,
+            });
+          }}
+        />
+      )}
 
         {activeTab === 'logs' && <LogsTab emailLogs={emailLogs} onRefresh={loadEmailLogs} />}
 
@@ -1187,6 +1333,12 @@ const StatCard = ({ label, value, icon, color }: { label: string; value: string;
 const SubscribersTab = ({
   subscribers,
   reminderConfig,
+  searchTerm,
+  onSearchChange,
+  quickFilter,
+  onQuickFilterChange,
+  advancedFilters,
+  onAdvancedFiltersChange,
   onAdd,
   onImport,
   onSyncFromWordPress,
@@ -1199,9 +1351,22 @@ const SubscribersTab = ({
   currentPage,
   perPage,
   onPageChange,
+  sortBy,
+  sortDir,
+  onSortChange,
+  isLoading,
+  error,
+  onRetry,
+  onClearFilters,
 }: {
   subscribers: Subscriber[];
   reminderConfig: ReminderConfig;
+  searchTerm: string;
+  onSearchChange: (value: string) => void;
+  quickFilter: 'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue';
+  onQuickFilterChange: (value: 'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue') => void;
+  advancedFilters: AdvancedSubscriberFilters;
+  onAdvancedFiltersChange: (value: AdvancedSubscriberFilters) => void;
   onAdd: () => void;
   onImport: () => void;
   onSyncFromWordPress: () => void;
@@ -1223,7 +1388,35 @@ const SubscribersTab = ({
   currentPage: number;
   perPage: number;
   onPageChange: (page: number) => void;
+  sortBy: string;
+  sortDir: 'asc' | 'desc';
+  onSortChange: (field: string, dir: 'asc' | 'desc') => void;
+  isLoading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  onClearFilters: () => void;
 }) => {
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const quickFilters: { id: 'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue'; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'active', label: 'Active' },
+    { id: 'expiring_7', label: 'Expiring in 7 days' },
+    { id: 'expiring_30', label: 'Expiring in 30 days' },
+    { id: 'overdue', label: 'Overdue' },
+  ];
+
+  const handleAdvancedChange = (field: keyof AdvancedSubscriberFilters, value: any) => {
+    onAdvancedFiltersChange({ ...advancedFilters, [field]: value });
+  };
+
+  const handleSortSelect = (value: string) => {
+    if (value === sortBy) {
+      onSortChange(sortBy, sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      onSortChange(value, 'asc');
+    }
+  };
+
   const totalPages = Math.ceil(total / perPage);
   const startItem = (currentPage - 1) * perPage + 1;
   const endItem = Math.min(currentPage * perPage, total);
@@ -1268,6 +1461,168 @@ const SubscribersTab = ({
         <button onClick={onImport} className="bg-dark text-white px-6 py-3 rounded-xl hover:bg-gray-800 shadow-lg shadow-gray-300 flex items-center gap-2 font-bold transition-all transform hover:-translate-y-1">
           <i className="fas fa-file-import"></i> Import CSV
         </button>
+      </div>
+    </div>
+
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 mb-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex-1">
+          <label className="sr-only" htmlFor="subscriber-search">Search subscribers</label>
+          <div className="relative">
+            <span className="absolute inset-y-0 left-3 flex items-center text-gray-400">
+              <i className="fas fa-search"></i>
+            </span>
+            <input
+              id="subscriber-search"
+              type="text"
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search by name, email, domain, Woo user ID..."
+              className="w-full pl-10 pr-10 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-primary focus:border-primary text-sm"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => onSearchChange('')}
+                className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600"
+                aria-label="Clear search"
+              >
+                <i className="fas fa-times"></i>
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex flex-wrap gap-2">
+            {quickFilters.map((filter) => (
+              <button
+                key={filter.id}
+                onClick={() => onQuickFilterChange(filter.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                  quickFilter === filter.id
+                    ? 'bg-primary text-white border-primary shadow-sm'
+                    : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-primary hover:text-primary'
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setShowAdvancedFilters((prev) => !prev)}
+            className="px-3 py-2 rounded-xl border border-gray-200 text-gray-700 hover:border-primary hover:text-primary text-sm font-semibold flex items-center gap-2"
+          >
+            <i className="fas fa-filter"></i>
+            More filters
+          </button>
+        </div>
+      </div>
+
+      {showAdvancedFilters && (
+        <div className="mt-4 border-t border-gray-100 pt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Status</label>
+            <select
+              value={advancedFilters.status || ''}
+              onChange={(e) => handleAdvancedChange('status', e.target.value || undefined)}
+              className="w-full rounded-lg border border-gray-200 py-2 px-3 text-sm"
+            >
+              <option value="">Any</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="trial">Trial</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Tag</label>
+            <input
+              value={advancedFilters.tag || ''}
+              onChange={(e) => handleAdvancedChange('tag', e.target.value || undefined)}
+              placeholder="VIP, Agency, Lifetime"
+              className="w-full rounded-lg border border-gray-200 py-2 px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Source</label>
+            <select
+              value={advancedFilters.source || ''}
+              onChange={(e) => handleAdvancedChange('source', e.target.value || undefined)}
+              className="w-full rounded-lg border border-gray-200 py-2 px-3 text-sm"
+            >
+              <option value="">Any</option>
+              <option value="woocommerce">WooCommerce</option>
+              <option value="manual">Manual</option>
+              <option value="api">API</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Next renewal from</label>
+            <input
+              type="date"
+              value={advancedFilters.nextRenewalFrom?.split('T')[0] || ''}
+              onChange={(e) => handleAdvancedChange('nextRenewalFrom', e.target.value ? new Date(e.target.value).toISOString() : undefined)}
+              className="w-full rounded-lg border border-gray-200 py-2 px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Next renewal to</label>
+            <input
+              type="date"
+              value={advancedFilters.nextRenewalTo?.split('T')[0] || ''}
+              onChange={(e) => handleAdvancedChange('nextRenewalTo', e.target.value ? new Date(e.target.value).toISOString() : undefined)}
+              className="w-full rounded-lg border border-gray-200 py-2 px-3 text-sm"
+            />
+          </div>
+          <div className="flex items-center gap-2 pt-5">
+            <input
+              id="has-phone-toggle"
+              type="checkbox"
+              checked={advancedFilters.hasPhone || false}
+              onChange={(e) => handleAdvancedChange('hasPhone', e.target.checked)}
+              className="rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <label htmlFor="has-phone-toggle" className="text-sm text-gray-700">Has WhatsApp / phone</label>
+          </div>
+          <div className="md:col-span-3 flex flex-wrap gap-2 justify-end">
+            <button
+              onClick={onClearFilters}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-200 text-gray-600 hover:text-primary"
+            >
+              Clear filters
+            </button>
+            <button
+              onClick={() => setShowAdvancedFilters(false)}
+              className="px-4 py-2 text-sm rounded-lg bg-primary text-white font-semibold shadow-sm"
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="text-xs text-gray-500">Filters stay in your URL so you can share this view.</div>
+        <div className="flex items-center gap-2 text-sm">
+          <label className="text-gray-500">Sort by</label>
+          <select
+            value={sortBy}
+            onChange={(e) => handleSortSelect(e.target.value)}
+            className="rounded-lg border border-gray-200 py-2 px-3 text-sm"
+          >
+            <option value="nextRenewalAt">Next renewal</option>
+            <option value="lastEmailSentAt">Last email sent</option>
+            <option value="mrr">MRR</option>
+            <option value="ltv">LTV</option>
+            <option value="createdAt">Created at</option>
+          </select>
+          <button
+            onClick={() => onSortChange(sortBy, sortDir === 'asc' ? 'desc' : 'asc')}
+            className="w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center text-gray-600 hover:text-primary"
+            aria-label="Toggle sort direction"
+          >
+            <i className={`fas ${sortDir === 'asc' ? 'fa-arrow-up' : 'fa-arrow-down'}`}></i>
+          </button>
+        </div>
       </div>
     </div>
     
@@ -1368,6 +1723,16 @@ const SubscribersTab = ({
       </div>
     )}
 
+    {error && (
+      <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <i className="fas fa-exclamation-triangle"></i>
+          <span>{error}</span>
+        </div>
+        <button onClick={onRetry} className="text-sm font-semibold underline">Retry</button>
+      </div>
+    )}
+
     <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
@@ -1383,7 +1748,35 @@ const SubscribersTab = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {subscribers.map((sub) => {
+            {isLoading &&
+              Array.from({ length: 5 }).map((_, idx) => (
+                <tr key={`skeleton-${idx}`} className="animate-pulse">
+                  <td className="px-8 py-5">
+                    <div className="h-4 w-32 bg-gray-200 rounded mb-2"></div>
+                    <div className="h-3 w-48 bg-gray-100 rounded"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-6 w-20 bg-gray-200 rounded-full"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 w-28 bg-gray-200 rounded"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 w-16 bg-gray-200 rounded"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 w-24 bg-gray-200 rounded"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 w-28 bg-gray-200 rounded"></div>
+                  </td>
+                  <td className="px-8 py-5 text-right">
+                    <div className="h-8 w-24 bg-gray-200 rounded-full ml-auto"></div>
+                  </td>
+                </tr>
+              ))}
+
+            {!isLoading && subscribers.map((sub) => {
               const daysUntilExpiry = Math.ceil((new Date(sub.endDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
               const isExpiringSoon = sub.status === 'ACTIVE' && daysUntilExpiry <= reminderConfig.firstReminderDays && daysUntilExpiry > 0;
               
@@ -1473,11 +1866,16 @@ const SubscribersTab = ({
                 </tr>
               );
             })}
-            {subscribers.length === 0 && (
+            {!isLoading && subscribers.length === 0 && (
               <tr>
                 <td colSpan={7} className="p-12 text-center text-gray-400">
-                  <i className="fas fa-folder-open text-4xl mb-4 opacity-30"></i>
-                  <p>No subscribers found. Import a CSV to get started.</p>
+                  <div className="flex flex-col items-center gap-2">
+                    <i className="fas fa-folder-open text-4xl mb-2 opacity-30"></i>
+                    <p className="font-semibold text-gray-600">No subscribers match your search.</p>
+                    <button onClick={onClearFilters} className="text-sm text-primary font-semibold">
+                      Clear filters and search
+                    </button>
+                  </div>
                 </td>
               </tr>
             )}

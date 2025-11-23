@@ -32,7 +32,21 @@ subscriberRouter.get('/api/subscribers/stats', async (_req, res, next) => {
 
 subscriberRouter.get('/api/subscribers', async (req, res, next) => {
   try {
-    const { status, search, skip, take } = req.query;
+    const {
+      q,
+      status,
+      source,
+      tag,
+      nextRenewalFrom,
+      nextRenewalTo,
+      expiringInDays,
+      hasPhone,
+      page = '1',
+      pageSize = '25',
+      sortBy = 'nextRenewalAt',
+      sortDir = 'asc',
+    } = req.query;
+
     const user = (req as any).user;
     if (!user || !user.id) {
       return res.status(401).json({ message: 'User not authenticated' });
@@ -46,14 +60,38 @@ subscriberRouter.get('/api/subscribers', async (req, res, next) => {
       return res.status(404).json({ message: 'Workspace not found for user' });
     }
 
+    const parsedPage = Math.max(1, Number(page) || 1);
+    const parsedPageSize = Math.min(100, Math.max(1, Number(pageSize) || 25));
+    const skip = (parsedPage - 1) * parsedPageSize;
+
     const result = await listSubscribers({
+      workspaceId: workspaceUser.workspaceId,
+      q: q as string | undefined,
       status: status as string | undefined,
-      search: search as string | undefined,
-      skip: skip ? Number(skip) : undefined,
-      take: take ? Number(take) : undefined,
-      workspaceId: workspaceUser.workspaceId
+      source: source as string | undefined,
+      tag: tag as string | undefined,
+      nextRenewalFrom: nextRenewalFrom as string | undefined,
+      nextRenewalTo: nextRenewalTo as string | undefined,
+      expiringInDays: expiringInDays ? Number(expiringInDays) : undefined,
+      hasPhone: typeof hasPhone === 'string' ? hasPhone === 'true' : undefined,
+      skip,
+      take: parsedPageSize,
+      sortBy: sortBy as string,
+      sortDir: sortDir === 'desc' ? 'desc' : 'asc',
     });
-    res.json(result);
+
+    const totalPages = Math.max(1, Math.ceil(result.total / parsedPageSize));
+    res.json({
+      data: result.items,
+      meta: {
+        page: parsedPage,
+        pageSize: parsedPageSize,
+        totalItems: result.total,
+        totalPages,
+        hasNextPage: parsedPage < totalPages,
+        hasPrevPage: parsedPage > 1,
+      },
+    });
   } catch (error) {
     next(error);
   }

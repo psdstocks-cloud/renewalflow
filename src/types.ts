@@ -17,6 +17,10 @@ export interface Subscriber {
   lastPurchaseDate?: string | null;
   createdAt: string;
   updatedAt: string;
+  woocommerceUserId?: string | null;
+  tags?: string[];
+  mrr?: number | null;
+  ltv?: number | null;
 }
 
 export interface ReminderConfig {
@@ -81,8 +85,15 @@ export interface SubscriberStats {
 }
 
 export interface SubscribersResponse {
-  items: Subscriber[];
-  total: number;
+  data: Subscriber[];
+  meta: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
 }
 
 export interface ReminderSendResponse {

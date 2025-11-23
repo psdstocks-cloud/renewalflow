@@ -22,22 +22,96 @@ const subscriberSchema = z.object({
 
 export type SubscriberInput = z.infer<typeof subscriberSchema>;
 
-export async function listSubscribers(params: { status?: string; search?: string; skip?: number; take?: number; workspaceId: string }) {
-  const { status, search, skip = 0, take = 50, workspaceId } = params;
-  const where: any = { workspaceId }; // Filter by workspaceId
-  if (status) {
-    where.status = status;
+export type SubscriberQueryParams = {
+  workspaceId: string;
+  q?: string;
+  status?: string;
+  source?: string;
+  tag?: string;
+  nextRenewalFrom?: string;
+  nextRenewalTo?: string;
+  expiringInDays?: number;
+  hasPhone?: boolean;
+  skip?: number;
+  take?: number;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+};
+
+export async function listSubscribers(params: SubscriberQueryParams) {
+  const {
+    workspaceId,
+    q,
+    status,
+    source,
+    tag,
+    nextRenewalFrom,
+    nextRenewalTo,
+    expiringInDays,
+    hasPhone,
+    skip = 0,
+    take = 25,
+    sortBy = 'nextRenewalAt',
+    sortDir = 'asc',
+  } = params;
+
+  const where: any = { workspaceId };
+
+  const normalizedStatus = status?.toUpperCase();
+  if (normalizedStatus) {
+    where.status = normalizedStatus;
   }
-  if (search) {
+
+  if (q) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } }
+      { email: { contains: q, mode: 'insensitive' } },
+      { name: { contains: q, mode: 'insensitive' } },
+      { planName: { contains: q, mode: 'insensitive' } },
     ];
   }
+
+  if (source) {
+    // Placeholder for future schema support
+  }
+
+  if (tag) {
+    // Placeholder for future schema support
+  }
+
+  const now = new Date();
+  const renewalFrom = expiringInDays !== undefined ? now : nextRenewalFrom ? new Date(nextRenewalFrom) : undefined;
+  const renewalTo =
+    expiringInDays !== undefined ? addDays(now, expiringInDays) : nextRenewalTo ? new Date(nextRenewalTo) : undefined;
+
+  if (renewalFrom || renewalTo) {
+    where.endDate = {};
+    if (renewalFrom) {
+      where.endDate.gte = renewalFrom;
+    }
+    if (renewalTo) {
+      where.endDate.lte = renewalTo;
+    }
+  }
+
+  if (typeof hasPhone === 'boolean') {
+    where.phone = hasPhone ? { not: null } : null;
+  }
+
+  const allowedSortFields: Record<string, string> = {
+    nextRenewalAt: 'endDate',
+    createdAt: 'createdAt',
+    mrr: 'amount',
+    ltv: 'pointsRemaining',
+    lastEmailSentAt: 'lastNotifiedAt',
+  };
+  const sortField = allowedSortFields[sortBy] || 'endDate';
+  const orderBy = { [sortField]: sortDir === 'desc' ? 'desc' : 'asc' } as any;
+
   const [items, total] = await Promise.all([
-    prisma.subscriber.findMany({ where, skip, take, orderBy: { createdAt: 'desc' } }),
-    prisma.subscriber.count({ where })
+    prisma.subscriber.findMany({ where, skip, take, orderBy }),
+    prisma.subscriber.count({ where }),
   ]);
+
   return { items, total };
 }
 
