@@ -427,11 +427,19 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
     return { upserted: 0 };
   }
 
-  // Use a transaction to batch all upserts for better performance
+  // Process users in smaller batches to avoid transaction timeouts
+  // Instead of one large transaction, process in chunks
   let upserted = 0;
+  const chunkSize = 10; // Process 10 users per transaction
+  
+  for (let i = 0; i < validUsers.length; i += chunkSize) {
+    const chunk = validUsers.slice(i, i + chunkSize);
+    
   await prisma.$transaction(
     async (tx) => {
-      for (const user of validUsers) {
+        for (const user of chunk) {
+          // Always update email to WordPress user email (this is the source of truth)
+          // This ensures Customer records have the correct WordPress user email, not billing email
         await tx.customer.upsert({
           where: {
             tenantId_externalUserId: {
@@ -440,7 +448,7 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
             },
           },
           update: {
-            email: user.email,
+              email: user.email, // Always use WordPress user email (not billing email)
             phone: user.phone ?? undefined,
             whatsapp: user.whatsapp ?? undefined,
             locale: user.locale ?? 'en',
@@ -449,7 +457,7 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
           create: {
             tenantId,
             externalUserId: BigInt(user.wp_user_id),
-            email: user.email,
+              email: user.email, // Always use WordPress user email
             phone: user.phone ?? undefined,
             whatsapp: user.whatsapp ?? undefined,
             locale: user.locale ?? 'en',
@@ -460,9 +468,10 @@ const processUsersInternal = async (users: z.infer<typeof userSchema>[], workspa
       }
     },
     {
-      timeout: 30000, // 30 second timeout for transaction
+        timeout: 30000, // 30 second timeout per chunk (smaller chunks = faster)
     }
   );
+  }
 
   return { upserted };
 };
@@ -541,6 +550,8 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
     const charge = charges[i];
     try {
     // Create or update customer if we have user info
+    // Note: charge.email should already be WordPress user email (from WordPress plugin)
+    // But we only update if wp_user_id exists to ensure we're using the correct email
     const customer = charge.wp_user_id && charge.email
       ? await prisma.customer.upsert({
           where: {
@@ -549,11 +560,13 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
               externalUserId: BigInt(charge.wp_user_id),
             },
           },
-          update: { email: charge.email },
+          update: { 
+            email: charge.email, // This should be WordPress user email from plugin
+          },
           create: {
             tenantId,
             externalUserId: BigInt(charge.wp_user_id),
-            email: charge.email,
+            email: charge.email, // This should be WordPress user email from plugin
           },
         })
       : null;

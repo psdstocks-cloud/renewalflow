@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Artly Reminder Bridge
  * Description: Syncs WooCommerce Points & Rewards and Subscriptions data into the Artly Reminder Engine with cron and manual sync.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Artly
  */
 
@@ -451,6 +451,9 @@ function artly_sync_points_from_woo(): array {
 }
 
 function artly_sync_users_from_woo(): array {
+  // Clear any previous cancel flag
+  delete_option( ARB_SYNC_CANCEL_FLAG );
+  
   // First, count total users to determine batch size
   $total_user_count = count_users();
   $total_users = (int) $total_user_count['total_users'];
@@ -464,23 +467,21 @@ function artly_sync_users_from_woo(): array {
     return array( 'success' => false, 'message' => $msg, 'count' => 0 );
   }
   
-  // Calculate batch size based on total users:
-  // - 1-50 users: process 10 at a time
-  // - 51-200 users: process 20 at a time
-  // - 201-500 users: process 30 at a time
-  // - 501-1000 users: process 40 at a time
-  // - 1000+ users: process 50 at a time (max)
-  if ( $total_users <= 50 ) {
-    $batch_size = 10;
-  } elseif ( $total_users <= 200 ) {
-    $batch_size = 20;
-  } elseif ( $total_users <= 500 ) {
-    $batch_size = 30;
-  } elseif ( $total_users <= 1000 ) {
-    $batch_size = 40;
-  } else {
-    $batch_size = 50; // Max batch size to prevent timeouts
-  }
+  // Initialize progress
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'users',
+    'status' => 'running',
+    'total' => $total_users,
+    'processed' => 0,
+    'imported' => 0,
+    'message' => sprintf( 'Starting sync of %d users...', $total_users ),
+    'start_time' => current_time( 'mysql', true ),
+    'end_time' => null,
+  ) );
+  
+  // Reduce batch size to prevent 502 timeouts (backend has 60s timeout)
+  // Process smaller batches to ensure each completes within timeout
+  $batch_size = 10; // Reduced to 10 to prevent 502 errors
   
   artly_reminder_bridge_log( sprintf( 'Using batch size: %d (total users: %d)', $batch_size, $total_users ) );
   
@@ -490,6 +491,22 @@ function artly_sync_users_from_woo(): array {
   $batch_number = 0;
 
   while ( true ) {
+    // Check for cancellation
+    if ( get_option( ARB_SYNC_CANCEL_FLAG, false ) ) {
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'users',
+        'status' => 'cancelled',
+        'total' => $total_users,
+        'processed' => $total_processed,
+        'imported' => $total_upserted,
+        'message' => 'Sync cancelled by user.',
+        'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+        'end_time' => current_time( 'mysql', true ),
+      ) );
+      delete_option( ARB_SYNC_CANCEL_FLAG );
+      return array( 'success' => false, 'message' => 'Sync cancelled by user.', 'count' => $total_upserted );
+    }
+    
     $batch_number++;
     
     // Fetch users in batches
@@ -509,7 +526,7 @@ function artly_sync_users_from_woo(): array {
       $user_meta = get_user_meta( $user->ID );
       $payload[] = array(
         'wp_user_id' => (int) $user->ID,
-        'email'      => $user->user_email,
+        'email'      => $user->user_email, // WordPress user email (not billing email)
         'phone'      => isset( $user_meta['billing_phone'][0] ) ? $user_meta['billing_phone'][0] : null,
         'whatsapp'   => isset( $user_meta['whatsapp'][0] ) ? $user_meta['whatsapp'][0] : null,
         'locale'     => get_user_locale( $user->ID ),
@@ -522,8 +539,19 @@ function artly_sync_users_from_woo(): array {
       continue;
     }
 
-    // Log batch progress
+    // Update progress before sending batch
     $progress = $total_users > 0 ? round( ( $total_processed / $total_users ) * 100, 1 ) : 0;
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'users',
+      'status' => 'running',
+      'total' => $total_users,
+      'processed' => $total_processed,
+      'imported' => $total_upserted,
+      'message' => sprintf( 'Processing batch %d of %d (%d users processed)...', $batch_number, ceil( $total_users / $batch_size ), $total_processed ),
+      'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+      'end_time' => null,
+    ) );
+    
     artly_reminder_bridge_log( sprintf( 
       'Processing batch %d: %d users (Progress: %d/%d, %.1f%%)', 
       $batch_number, 
@@ -538,6 +566,16 @@ function artly_sync_users_from_woo(): array {
       $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error' );
       $msg = sprintf( 'Failed to sync users batch %d (offset %d, %d users). %s', $batch_number, $offset, count( $payload ), $error );
       artly_reminder_bridge_log( $msg );
+      update_option( ARB_SYNC_PROGRESS_OPTION, array(
+        'type' => 'users',
+        'status' => 'error',
+        'total' => $total_users,
+        'processed' => $total_processed,
+        'imported' => $total_upserted,
+        'message' => sprintf( 'Error: %s', $error ),
+        'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+        'end_time' => current_time( 'mysql', true ),
+      ) );
       update_option( ARB_LAST_SYNC_RESULT, array( 
         'type' => 'users', 
         'success' => false, 
@@ -576,9 +614,20 @@ function artly_sync_users_from_woo(): array {
     }
   }
 
+  // Finalize progress
   if ( $total_upserted > 0 ) {
     $msg = sprintf( 'Successfully synced %d of %d users', $total_upserted, $total_users );
     artly_reminder_bridge_log( $msg );
+    update_option( ARB_SYNC_PROGRESS_OPTION, array(
+      'type' => 'users',
+      'status' => 'completed',
+      'total' => $total_users,
+      'processed' => $total_processed,
+      'imported' => $total_upserted,
+      'message' => $msg,
+      'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+      'end_time' => current_time( 'mysql', true ),
+    ) );
     update_option( ARB_LAST_SYNC_RESULT, array( 
       'type' => 'users', 
       'success' => true, 
@@ -592,6 +641,16 @@ function artly_sync_users_from_woo(): array {
   
   $msg = 'No users were synced.';
   artly_reminder_bridge_log( $msg );
+  update_option( ARB_SYNC_PROGRESS_OPTION, array(
+    'type' => 'users',
+    'status' => 'completed',
+    'total' => $total_users,
+    'processed' => $total_processed,
+    'imported' => 0,
+    'message' => $msg,
+    'start_time' => get_option( ARB_SYNC_PROGRESS_OPTION )['start_time'] ?? current_time( 'mysql', true ),
+    'end_time' => current_time( 'mysql', true ),
+  ) );
   update_option( ARB_LAST_SYNC_RESULT, array( 'type' => 'users', 'success' => false, 'message' => $msg, 'count' => 0 ) );
   return array( 'success' => false, 'message' => $msg, 'count' => 0 );
 }
@@ -685,7 +744,7 @@ function artly_sync_charges_from_woo(): array {
     }
 
     $batch_number++;
-    $payload = array();
+  $payload = array();
 
     foreach ( $batch as $order_id ) {
       $order = wc_get_order( $order_id );
@@ -693,14 +752,14 @@ function artly_sync_charges_from_woo(): array {
         continue;
       }
 
-      $user_id = $order->get_user_id();
-      if ( ! $user_id ) {
-        continue;
-      }
+    $user_id = $order->get_user_id();
+    if ( ! $user_id ) {
+      continue;
+    }
 
       // Get email: prefer WordPress user email, fallback to billing email
       $billing_email = $order->get_billing_email();
-      $user = get_userdata( $user_id );
+    $user = get_userdata( $user_id );
       $email = ( $user && ! empty( $user->user_email ) ) ? $user->user_email : $billing_email;
       
       // If billing email differs from user email, log it for debugging
@@ -717,25 +776,25 @@ function artly_sync_charges_from_woo(): array {
       $date_created = $order->get_date_created();
       $created_at = $date_created ? gmdate( 'c', $date_created->getTimestamp() ) : gmdate( 'c' );
 
-      $payload[] = array(
-        'external_charge_id' => (string) $order->get_id(),
-        'wp_user_id'         => $user_id > 0 ? $user_id : null,
+    $payload[] = array(
+      'external_charge_id' => (string) $order->get_id(),
+      'wp_user_id'         => $user_id > 0 ? $user_id : null,
         'email'              => $email, // Use WordPress user email if available
-        'order_id'           => (string) $order->get_id(),
-        'amount'             => (float) $order->get_total(),
-        'currency'           => $order->get_currency(),
-        'status'             => $order->get_status(),
-        'payment_method'     => $order->get_payment_method(),
+      'order_id'           => (string) $order->get_id(),
+      'amount'             => (float) $order->get_total(),
+      'currency'           => $order->get_currency(),
+      'status'             => $order->get_status(),
+      'payment_method'     => $order->get_payment_method(),
         'created_at'         => $created_at,
-      );
-    }
+    );
+  }
 
-    if ( empty( $payload ) ) {
+  if ( empty( $payload ) ) {
       continue;
-    }
+  }
 
     // Send batch to API
-    $result = artly_reminder_bridge_post_to_api( 'artly/sync/charges', $payload );
+  $result = artly_reminder_bridge_post_to_api( 'artly/sync/charges', $payload );
     
     if ( null === $result ) {
       $error = get_option( ARB_LAST_SYNC_ERROR, 'Unknown error during charge sync' );
@@ -830,6 +889,27 @@ function artly_start_sync_points() {
   // Run balance sync (not events sync)
   $result = artly_sync_points_balances_from_woo();
   wp_send_json_success( $result );
+}
+
+add_action( 'wp_ajax_artly_start_sync_users', 'artly_start_sync_users' );
+function artly_start_sync_users() {
+  check_ajax_referer( 'artly_sync_users', '_wpnonce' );
+  
+  // Clear any previous progress
+  delete_option( ARB_SYNC_PROGRESS_OPTION );
+  
+  $result = artly_sync_users_from_woo();
+  wp_send_json_success( $result );
+}
+
+add_action( 'wp_ajax_artly_get_users_count', 'artly_get_users_count' );
+function artly_get_users_count() {
+  check_ajax_referer( 'artly_sync_users', '_wpnonce' );
+  
+  $total_user_count = count_users();
+  $total_users = (int) $total_user_count['total_users'];
+  
+  wp_send_json_success( array( 'total' => $total_users ) );
 }
 
 add_action( 'wp_ajax_artly_start_sync_charges', 'artly_start_sync_charges' );
@@ -951,13 +1031,14 @@ function artly_reminder_bridge_handle_post(): ?string {
     return '<span style="color: green;">✅ Connection successful! API key is valid.</span>';
   }
 
-  if ( isset( $_POST['artly_sync_users'] ) ) {
-    $result = artly_sync_users_from_woo();
-    if ( $result['success'] ) {
-      return '<span style="color: green;">✅ ' . esc_html( $result['message'] ) . ' (' . $result['count'] . ' of ' . $result['total'] . ' users)</span>';
-    }
-    return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
-  }
+  // Users sync is now handled via AJAX (see artly_start_sync_users AJAX handler)
+  // if ( isset( $_POST['artly_sync_users'] ) ) {
+  //   $result = artly_sync_users_from_woo();
+  //   if ( $result['success'] ) {
+  //     return '<span style="color: green;">✅ ' . esc_html( $result['message'] ) . ' (' . $result['count'] . ' of ' . $result['total'] . ' users)</span>';
+  //   }
+  //   return '<span style="color: red;">❌ ' . esc_html( $result['message'] ) . '</span>';
+  // }
 
   if ( isset( $_POST['artly_sync_points'] ) ) {
     // Manual sync now uses balance sync, not event sync
@@ -1014,6 +1095,205 @@ function artly_reminder_bridge_render_admin_page(): void {
         <span class="dashicons <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'dashicons-yes-alt' : 'dashicons-warning'; ?>"></span>
         <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? esc_html__( 'Connected', 'artly-reminder-bridge' ) : esc_html__( 'Not configured', 'artly-reminder-bridge' ); ?>
       </div>
+    </div>
+
+    <?php if ( $message ) : ?>
+      <div class="artly-reminder-alert">
+        <?php echo wp_kses_post( $message ); ?>
+      </div>
+    <?php endif; ?>
+
+    <div class="artly-reminder-grid artly-reminder-grid--summary">
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-admin-users"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'WordPress Users', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( $total_users ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Synced into RenewalFlow engine.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-update"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Sync Strategy', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value">
+            <?php if ( $total_users > 0 ) : ?>
+            <?php printf( esc_html__( 'Batch size: %d users', 'artly-reminder-bridge' ), $expected_batch_size ); ?>
+            <?php else : ?>
+            <?php esc_html_e( 'No users to sync', 'artly-reminder-bridge' ); ?>
+            <?php endif; ?>
+        </div>
+        <p class="artly-reminder-card__desc"><?php printf( esc_html__( 'Expected batches: %d', 'artly-reminder-bridge' ), $expected_batches ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-awards"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Last Points Log ID', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( (string) $last_id ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Latest Woo Points entry processed.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+      <div class="artly-reminder-card">
+        <div class="artly-reminder-card__icon"><span class="dashicons dashicons-backup"></span></div>
+        <div class="artly-reminder-card__title"><?php esc_html_e( 'Last Sync Time (UTC)', 'artly-reminder-bridge' ); ?></div>
+        <div class="artly-reminder-card__value"><?php echo esc_html( $last_sync ? $last_sync : __( 'Never', 'artly-reminder-bridge' ) ); ?></div>
+        <p class="artly-reminder-card__desc"><?php esc_html_e( 'Auto-sync runs hourly.', 'artly-reminder-bridge' ); ?></p>
+      </div>
+    </div>
+
+    <div class="artly-reminder-grid artly-reminder-grid--two">
+      <div class="artly-reminder-card artly-reminder-card--panel">
+        <div class="artly-reminder-card__header">
+          <div>
+            <div class="artly-reminder-card__title"><?php esc_html_e( 'Connection to RenewalFlow', 'artly-reminder-bridge' ); ?></div>
+            <p class="artly-reminder-card__desc"><?php esc_html_e( 'Configure your RenewalFlow base URL and API key to enable secure syncing.', 'artly-reminder-bridge' ); ?></p>
+          </div>
+        </div>
+        <form method="post" class="artly-reminder-form">
+      <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
+          <div class="artly-reminder-form-grid">
+            <div class="artly-reminder-form-group">
+              <label for="artly_reminder_engine_url"><?php esc_html_e( 'RenewalFlow API Base URL', 'artly-reminder-bridge' ); ?></label>
+              <input name="artly_reminder_engine_url" type="url" id="artly_reminder_engine_url" value="<?php echo esc_attr( $api_url ); ?>" placeholder="https://renewalflow-production.up.railway.app" required />
+              <p class="description"><?php esc_html_e( 'Example: https://renewalflow-production.up.railway.app', 'artly-reminder-bridge' ); ?></p>
+      </div>
+            <div class="artly-reminder-form-group">
+              <label for="artly_reminder_engine_secret"><?php esc_html_e( 'API Key', 'artly-reminder-bridge' ); ?></label>
+              <input name="artly_reminder_engine_secret" type="password" id="artly_reminder_engine_secret" value="<?php echo esc_attr( $api_secret ); ?>" placeholder="artly_workspaceId_..." required />
+              <p class="description"><?php esc_html_e( 'Copy this from your RenewalFlow dashboard → Integrations tab. It should start with "artly_".', 'artly-reminder-bridge' ); ?></p>
+            </div>
+          </div>
+          <div class="artly-reminder-actions">
+            <button type="submit" name="submit" class="button artly-reminder-button-primary"><?php esc_html_e( 'Save settings', 'artly-reminder-bridge' ); ?></button>
+        <?php if ( ! empty( $api_url ) && ! empty( $api_secret ) ) : ?>
+              <button type="submit" name="artly_test_connection" value="1" class="button artly-reminder-button-secondary"><?php esc_html_e( 'Test Connection', 'artly-reminder-bridge' ); ?></button>
+              <span class="artly-reminder-inline-status <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'is-connected' : 'is-disconnected'; ?>">
+                <span class="dashicons <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? 'dashicons-yes' : 'dashicons-dismiss'; ?>"></span>
+                <?php echo ( ! empty( $api_url ) && ! empty( $api_secret ) ) ? esc_html__( 'Ready to connect', 'artly-reminder-bridge' ) : esc_html__( 'Missing credentials', 'artly-reminder-bridge' ); ?>
+              </span>
+        <?php endif; ?>
+          </div>
+    </form>
+      </div>
+
+      <div class="artly-reminder-card artly-reminder-card--panel">
+        <div class="artly-reminder-card__header">
+          <div>
+            <div class="artly-reminder-card__title"><?php esc_html_e( 'Manual Sync Tools', 'artly-reminder-bridge' ); ?></div>
+            <p class="artly-reminder-card__desc"><?php esc_html_e( 'Use these tools to trigger a one-time sync with RenewalFlow. Large syncs are processed in batches.', 'artly-reminder-bridge' ); ?></p>
+          </div>
+        </div>
+        <form method="post" class="artly-reminder-manual-form">
+        <?php wp_nonce_field( 'artly_reminder_bridge_save', 'artly_reminder_bridge_nonce' ); ?>
+          <div class="artly-reminder-manual-grid">
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></div>
+                <p><?php esc_html_e( 'Sync all WordPress users to the Reminder Engine.', 'artly-reminder-bridge' ); ?> (<?php echo esc_html( $total_users ); ?> <?php esc_html_e( 'users', 'artly-reminder-bridge' ); ?>, ~<?php echo esc_html( $expected_batches ); ?> <?php esc_html_e( 'batches', 'artly-reminder-bridge' ); ?>)</p>
+              </div>
+              <button type="button" id="artly-sync-users-btn" class="button artly-reminder-button-secondary"><?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?></button>
+              <button type="button" id="artly-cancel-users-sync-btn" style="display: none; margin-left: 10px; background: #dc3232; color: white; border-color: #dc3232;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+            </div>
+            <div id="artly-users-sync-progress" style="display: none; margin-top: 10px; padding: 15px; background: #f9f9f9; border-left: 4px solid #2271b1; max-width: 700px; border-radius: 4px; position: relative;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <p style="margin: 0; font-weight: bold; color: #2271b1;">
+                  <i class="dashicons dashicons-update" style="animation: spin 1s linear infinite; display: inline-block; margin-right: 5px;"></i>
+                  <?php esc_html_e( 'Users Sync Progress', 'artly-reminder-bridge' ); ?>
+                </p>
+                <button type="button" id="artly-dismiss-users-progress" style="display: none; background: transparent; border: none; color: #666; cursor: pointer; font-size: 18px; padding: 0; width: 24px; height: 24px; line-height: 1;" title="Dismiss">
+                  <span style="font-size: 20px;">×</span>
+                </button>
+              </div>
+              <div id="artly-users-progress-message" style="margin-bottom: 10px; color: #333; font-size: 14px;"></div>
+              <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; height: 24px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
+                <div id="artly-users-progress-bar" style="background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; width: 0%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+                  <span id="artly-users-progress-percentage">0%</span>
+                </div>
+              </div>
+              <p id="artly-users-progress-stats" style="margin: 10px 0 0 0; font-size: 13px; color: #666; line-height: 1.6;">
+                <span id="artly-users-progress-details"></span>
+              </p>
+            </div>
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?></div>
+                <p id="artly-points-description">
+                  <?php
+                  global $wpdb;
+                  $points_total_users = 0;
+                  if ( artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+                    if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
+                      $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+                      $points_total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$table_name}" );
+                    } else {
+                      $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+                      $points_total_users = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT user_id) FROM {$log_table}" );
+                    }
+                  }
+                  esc_html_e( 'Push current WooCommerce points to RenewalFlow.', 'artly-reminder-bridge' );
+                  if ( $points_total_users > 0 ) {
+                    echo ' (' . esc_html( number_format( $points_total_users ) ) . ' users with points)';
+                  }
+                  ?>
+                </p>
+              </div>
+              <div class="artly-reminder-button-group">
+                <button type="button" class="button artly-reminder-button-secondary" id="artly-sync-points-btn"><?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?></button>
+                <button type="button" class="button artly-reminder-button-danger" id="artly-cancel-sync-btn" style="display: none;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+              </div>
+            </div>
+            <div id="artly-sync-progress" class="artly-reminder-progress" style="display: none;">
+              <div class="artly-reminder-progress__header">
+                <p>
+                  <i class="dashicons dashicons-update"></i>
+                  <?php esc_html_e( 'Points Sync Progress', 'artly-reminder-bridge' ); ?>
+                </p>
+              </div>
+              <div id="artly-progress-message" class="artly-reminder-progress__message"></div>
+              <div class="artly-reminder-progress__bar">
+                <div id="artly-progress-bar" class="artly-reminder-progress__fill"><span id="artly-progress-percentage">0%</span></div>
+              </div>
+              <p id="artly-progress-stats" class="artly-reminder-progress__stats"><span id="artly-progress-details"></span></p>
+            </div>
+            <div class="artly-reminder-manual-item">
+              <div class="artly-reminder-manual-text">
+                <div class="artly-reminder-manual-title"><?php esc_html_e( 'Sync Charges / Orders', 'artly-reminder-bridge' ); ?></div>
+                <p id="artly-charges-description">
+                  <?php
+                  $total_orders = 0;
+                  if ( class_exists( 'WooCommerce' ) ) {
+                    $orders = wc_get_orders(
+                      array(
+                        'limit'  => -1,
+                        'status' => array( 'processing', 'completed', 'on-hold' ),
+                        'return' => 'ids',
+                      )
+                    );
+                    $total_orders = count( $orders );
+                  }
+                  esc_html_e( 'Sync WooCommerce orders used for renewals.', 'artly-reminder-bridge' );
+                  if ( $total_orders > 0 ) {
+                    echo ' (' . esc_html( number_format( $total_orders ) ) . ' orders)';
+                  }
+                  ?>
+                </p>
+              </div>
+              <div class="artly-reminder-button-group">
+                <button type="button" class="button artly-reminder-button-secondary" id="artly-sync-charges-btn"><?php esc_html_e( 'Sync Charges', 'artly-reminder-bridge' ); ?></button>
+                <button type="button" class="button artly-reminder-button-danger" id="artly-cancel-charges-sync-btn" style="display: none;"><?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?></button>
+              </div>
+            </div>
+            <div id="artly-charges-sync-progress" class="artly-reminder-progress" style="display: none;">
+              <div class="artly-reminder-progress__header">
+                <p>
+                  <i class="dashicons dashicons-update"></i>
+                  <?php esc_html_e( 'Charges Sync Progress', 'artly-reminder-bridge' ); ?>
+                </p>
+                <button type="button" id="artly-dismiss-charges-progress" class="artly-reminder-dismiss" style="display: none;">×</button>
+              </div>
+              <div id="artly-charges-progress-message" class="artly-reminder-progress__message"></div>
+              <div class="artly-reminder-progress__bar">
+                <div id="artly-charges-progress-bar" class="artly-reminder-progress__fill"><span id="artly-charges-progress-percentage">0%</span></div>
+              </div>
+              <p id="artly-charges-progress-stats" class="artly-reminder-progress__stats"><span id="artly-charges-progress-details"></span></p>
+            </div>
+          </div>
+      </form>
     </div>
 
     <?php if ( $message ) : ?>
@@ -1195,6 +1475,7 @@ function artly_reminder_bridge_render_admin_page(): void {
       </div>
     </div>
 
+    <p class="artly-reminder-footer"><?php esc_html_e( 'Tip: You can view detailed sync logs from the RenewalFlow dashboard.', 'artly-reminder-bridge' ); ?></p>
     <p class="artly-reminder-footer"><?php esc_html_e( 'Tip: You can view detailed sync logs from the RenewalFlow dashboard.', 'artly-reminder-bridge' ); ?></p>
   </div>
   <style>
@@ -1798,6 +2079,334 @@ function artly_reminder_bridge_render_admin_page(): void {
 
     // Check for existing sync on page load
     updateProgress();
+  })();
+
+  // Users sync progress tracking
+  (function() {
+    const usersSyncBtn = document.getElementById('artly-sync-users-btn');
+    const usersCancelBtn = document.getElementById('artly-cancel-users-sync-btn');
+    const usersProgressDiv = document.getElementById('artly-users-sync-progress');
+    const usersProgressMessage = document.getElementById('artly-users-progress-message');
+    const usersProgressBar = document.getElementById('artly-users-progress-bar');
+    const usersProgressPercentage = document.getElementById('artly-users-progress-percentage');
+    const usersProgressDetails = document.getElementById('artly-users-progress-details');
+    const usersDismissBtn = document.getElementById('artly-dismiss-users-progress');
+    let usersProgressInterval = null;
+    let usersTotalToSync = 0;
+    let usersIsCancelled = false;
+
+    function clearUsersProgress() {
+      fetch(ajaxurl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          action: 'artly_clear_sync_progress',
+          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_progress' ); ?>',
+        }),
+      })
+      .then(() => {
+        usersProgressDiv.style.display = 'none';
+        if (usersSyncBtn) {
+          usersSyncBtn.disabled = false;
+          usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+        }
+      })
+      .catch(error => {
+        console.error('Error clearing progress:', error);
+      });
+    }
+
+    function formatNumber(num) {
+      return new Intl.NumberFormat().format(num);
+    }
+
+    function updateUsersProgress() {
+      fetch(ajaxurl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          action: 'artly_get_sync_progress',
+          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_progress' ); ?>',
+        }),
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.data && data.data.type === 'users') {
+          const progress = data.data;
+          
+          if (progress.status === 'running') {
+            usersProgressDiv.style.display = 'block';
+            usersProgressMessage.textContent = progress.message || 'Syncing users...';
+            
+            const percentage = progress.total > 0 
+              ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
+              : 0;
+            
+            usersProgressBar.style.width = percentage + '%';
+            usersProgressPercentage.textContent = percentage + '%';
+            
+            const processed = formatNumber(progress.processed);
+            const total = formatNumber(progress.total);
+            const imported = formatNumber(progress.imported);
+            
+            usersProgressDetails.innerHTML = `
+              <strong>Processed:</strong> ${processed} / ${total} users<br>
+              <strong>Synced:</strong> ${imported} users<br>
+              <strong>Progress:</strong> ${percentage}% complete
+            `;
+            
+            if (usersProgressInterval) {
+              clearTimeout(usersProgressInterval);
+            }
+            usersProgressInterval = setTimeout(updateUsersProgress, 800);
+          } else if (progress.status === 'completed') {
+            usersProgressDiv.style.display = 'block';
+            usersProgressMessage.textContent = progress.message || '✅ Users sync completed successfully!';
+            usersProgressBar.style.width = '100%';
+            usersProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+            usersProgressPercentage.textContent = '100%';
+            
+            const processed = formatNumber(progress.processed);
+            const imported = formatNumber(progress.imported);
+            
+            usersProgressDetails.innerHTML = `
+              <strong style="color: #46b450;">✓ Completed!</strong><br>
+              <strong>Total processed:</strong> ${processed} users<br>
+              <strong>Total synced:</strong> ${imported} users
+            `;
+            
+            if (usersSyncBtn) {
+              usersSyncBtn.disabled = false;
+              usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+            }
+            if (usersCancelBtn) {
+              usersCancelBtn.style.display = 'none';
+            }
+            if (usersDismissBtn) {
+              usersDismissBtn.style.display = 'block';
+            }
+            
+            if (usersProgressInterval) {
+              clearTimeout(usersProgressInterval);
+            }
+            
+            clearUsersProgress();
+            
+            setTimeout(() => {
+              usersProgressDiv.style.display = 'none';
+              if (usersDismissBtn) {
+                usersDismissBtn.style.display = 'none';
+              }
+            }, 5000);
+          } else if (progress.status === 'error') {
+            usersProgressDiv.style.display = 'block';
+            usersProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+            usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+            
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            
+            usersProgressDetails.innerHTML = `
+              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} users
+            `;
+            
+            if (usersSyncBtn) {
+              usersSyncBtn.disabled = false;
+              usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+            }
+            if (usersCancelBtn) {
+              usersCancelBtn.style.display = 'none';
+            }
+            if (usersDismissBtn) {
+              usersDismissBtn.style.display = 'block';
+            }
+            
+            if (usersProgressInterval) {
+              clearTimeout(usersProgressInterval);
+            }
+            
+            clearUsersProgress();
+          } else if (progress.status === 'cancelled') {
+            usersProgressDiv.style.display = 'block';
+            usersProgressMessage.textContent = '⚠️ Sync cancelled by user.';
+            usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+            
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            
+            usersProgressDetails.innerHTML = `
+              <strong style="color: #d97706;">✗ Cancelled</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} users
+            `;
+            
+            if (usersSyncBtn) {
+              usersSyncBtn.disabled = false;
+              usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+            }
+            if (usersCancelBtn) {
+              usersCancelBtn.style.display = 'none';
+            }
+            if (usersDismissBtn) {
+              usersDismissBtn.style.display = 'block';
+            }
+            
+            if (usersProgressInterval) {
+              clearTimeout(usersProgressInterval);
+            }
+            
+            clearUsersProgress();
+          } else {
+            if (usersProgressInterval) {
+              clearTimeout(usersProgressInterval);
+            }
+          }
+        } else {
+          if (usersProgressInterval) {
+            clearTimeout(usersProgressInterval);
+          }
+        }
+      })
+      .catch(error => {
+        console.error('Error fetching users progress:', error);
+        if (usersProgressInterval) {
+          clearTimeout(usersProgressInterval);
+        }
+      });
+    }
+
+    if (usersSyncBtn) {
+      usersSyncBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        usersIsCancelled = false;
+
+        fetch(ajaxurl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            action: 'artly_get_users_count',
+            _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_users' ); ?>',
+          }),
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success && data.data) {
+            usersTotalToSync = data.data.total || 0;
+
+            usersProgressDiv.style.display = 'block';
+            usersProgressMessage.textContent = 'Initializing users sync...';
+            usersProgressBar.style.width = '0%';
+            usersProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+            usersProgressPercentage.textContent = '0%';
+            usersProgressDetails.innerHTML = `
+              <strong>Total to sync:</strong> ${formatNumber(usersTotalToSync)} users<br>
+              <strong>Status:</strong> Starting...
+            `;
+            
+            usersSyncBtn.disabled = true;
+            usersSyncBtn.textContent = 'Syncing...';
+            if (usersCancelBtn) {
+              usersCancelBtn.style.display = 'inline-block';
+            }
+            
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_start_sync_users',
+                _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_users' ); ?>',
+              }),
+            })
+            .then(response => response.json())
+            .then(data => {
+              if (usersIsCancelled) {
+                usersProgressMessage.textContent = '⚠️ Sync was cancelled.';
+                usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                return;
+              }
+              
+              if (data.success) {
+                updateUsersProgress();
+              } else {
+                usersProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+                
+                if (usersSyncBtn) {
+                  usersSyncBtn.disabled = false;
+                  usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+                }
+                if (usersCancelBtn) {
+                  usersCancelBtn.style.display = 'none';
+                }
+              }
+            })
+            .catch(error => {
+              console.error('Error during users sync:', error);
+              usersProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
+              usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+              usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
+              
+              if (usersSyncBtn) {
+                usersSyncBtn.disabled = false;
+                usersSyncBtn.textContent = '<?php esc_html_e( 'Sync Users', 'artly-reminder-bridge' ); ?>';
+              }
+              if (usersCancelBtn) {
+                usersCancelBtn.style.display = 'none';
+              }
+            });
+          }
+        })
+        .catch(err => {
+          console.error('Error getting users count:', err);
+        });
+      });
+    }
+
+    if (usersCancelBtn) {
+      usersCancelBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (confirm('Are you sure you want to cancel the sync?')) {
+          usersIsCancelled = true;
+          
+          fetch(ajaxurl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              action: 'artly_cancel_sync',
+              _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_users' ); ?>',
+            }),
+          })
+          .then(() => {
+            usersProgressMessage.textContent = '⚠️ Cancelling sync...';
+            usersCancelBtn.disabled = true;
+          })
+          .catch(error => {
+            console.error('Error cancelling sync:', error);
+          });
+        }
+      });
+    }
+
+    if (usersDismissBtn) {
+      usersDismissBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        clearUsersProgress();
+      });
+    }
+
+    updateUsersProgress();
   })();
 
   // Charges sync progress tracking

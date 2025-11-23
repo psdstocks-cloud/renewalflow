@@ -106,3 +106,33 @@ export function useLocation() {
   const { pathname } = useRouterContext();
   return { pathname };
 }
+
+export function useSearchParams() {
+  const [search, setSearch] = useState(() => window.location.search);
+  
+  useEffect(() => {
+    const handlePopState = () => setSearch(window.location.search);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const searchParams = useMemo(() => {
+    return new URLSearchParams(search);
+  }, [search]);
+
+  const setSearchParams = (updater: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams), options?: { replace?: boolean }) => {
+    const newParams = typeof updater === 'function' ? updater(searchParams) : updater;
+    const newSearch = newParams.toString();
+    const newUrl = `${window.location.pathname}${newSearch ? `?${newSearch}` : ''}${window.location.hash}`;
+    
+    if (options?.replace) {
+      window.history.replaceState(null, '', newUrl);
+    } else {
+      window.history.pushState(null, '', newUrl);
+    }
+    setSearch(newSearch);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+
+  return [searchParams, setSearchParams] as const;
+}

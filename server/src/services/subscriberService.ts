@@ -154,6 +154,8 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
   });
   
   // Get all customers for this workspace/tenant
+  // Note: Customer.email should be WordPress user email (from users sync or charges sync)
+  // If it's a billing email, that means the customer was created from a guest order (no wp_user_id)
   const customers = await prisma.customer.findMany({
     where: { tenantId },
     include: {
@@ -276,6 +278,12 @@ export async function syncCustomersToSubscribers(workspaceId: string, updateProg
 
       // Create name from email (or use email as name)
       const name = customer.email.split('@')[0] || customer.email;
+
+      // Note: customer.email should be WordPress user email (from users sync or charges sync)
+      // If it's a billing email, that means:
+      // 1. Customer was created from a guest order (no wp_user_id) - this is expected
+      // 2. Customer record wasn't updated by users sync yet - run "Sync Users" in WordPress plugin
+      // 3. Customer record was created before charges sync fix - re-sync charges
 
       // Check if subscriber already exists by email (from batch lookup)
       const existing = existingSubscribersMap.get(customer.email);
