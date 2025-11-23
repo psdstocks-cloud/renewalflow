@@ -8,6 +8,13 @@ import {
   processUsers,
   processCharges,
 } from '../services/artlyService';
+import {
+  createSyncJob,
+  getSyncJob,
+  updateJobProgress,
+  failJob,
+  cancelJob,
+} from '../services/syncJobService';
 import { prisma } from '../config/db';
 
 export const artlyRouter = Router();
@@ -104,10 +111,127 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
   }
 });
 
+// New job-based endpoints for points balance sync
+artlyRouter.post('/artly/sync/points-balances/start', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const balances = Array.isArray(req.body) ? req.body : [];
+    
+    console.log('[artly/sync/points-balances/start] Received balance sync request');
+    console.log('[artly/sync/points-balances/start] WorkspaceId:', workspaceId);
+    console.log('[artly/sync/points-balances/start] Body length:', balances.length);
+    
+    // Create sync job
+    const job = createSyncJob('points-balances', workspaceId, balances.length);
+    
+    // Start async processing (don't await)
+    processPointsBalances(balances, workspaceId, job.jobId).catch((error) => {
+      console.error('[artly/sync/points-balances/start] Sync error:', error);
+      failJob(job.jobId, error.message || 'Unknown error during sync');
+    });
+    
+    // Return jobId immediately
+    res.json({
+      success: true,
+      jobId: job.jobId,
+      message: 'Sync job started',
+    });
+  } catch (error: any) {
+    console.error('[artly/sync/points-balances/start] Error:', error);
+    next(error);
+  }
+});
+
+artlyRouter.get('/artly/sync/points-balances/status', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const jobId = req.query.jobId as string;
+    
+    if (!jobId) {
+      return res.status(400).json({ error: 'jobId is required' });
+    }
+    
+    const job = getSyncJob(jobId);
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    
+    // Verify job belongs to this workspace
+    if (job.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    res.json({
+      success: true,
+      job: {
+        jobId: job.jobId,
+        status: job.status,
+        progress: job.progress,
+        total: job.total,
+        processed: job.processed,
+        stepMessage: job.stepMessage,
+        error: job.error,
+        result: job.result,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        completedAt: job.completedAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+artlyRouter.post('/artly/sync/points-balances/cancel', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    const jobId = req.body.jobId as string;
+    
+    if (!jobId) {
+      return res.status(400).json({ error: 'jobId is required' });
+    }
+    
+    const job = getSyncJob(jobId);
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    
+    // Verify job belongs to this workspace
+    if (job.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // Only cancel if job is still running
+    if (job.status !== 'running' && job.status !== 'pending') {
+      return res.json({
+        success: true,
+        message: 'Job is already completed or cancelled',
+        job: {
+          jobId: job.jobId,
+          status: job.status,
+        },
+      });
+    }
+    
+    cancelJob(jobId);
+    
+    res.json({
+      success: true,
+      message: 'Job cancellation requested',
+      jobId: jobId,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Legacy endpoint (kept for backward compatibility)
 artlyRouter.post('/artly/sync/points-balances', artlyAuth, async (req, res, next) => {
   try {
     const workspaceId = (req as any).workspaceId;
-    console.log('[artly/sync/points-balances] Received balance sync request');
+    console.log('[artly/sync/points-balances] Received balance sync request (legacy)');
     console.log('[artly/sync/points-balances] WorkspaceId:', workspaceId);
     console.log('[artly/sync/points-balances] Body length:', Array.isArray(req.body) ? req.body.length : 'not an array');
     

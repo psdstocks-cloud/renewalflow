@@ -619,12 +619,28 @@ const pointsBalanceSchema = z.object({
   points_balance: z.number().int(),
 });
 
-export const processPointsBalances = async (rawBalances: unknown, workspaceId?: string | null) => {
-  console.log('[processPointsBalances] Starting balance sync...');
+export const processPointsBalances = async (
+  rawBalances: unknown,
+  workspaceId?: string | null,
+  jobId?: string | null
+) => {
+  const { updateJobProgress } = await import('./syncJobService');
+  
+  console.log('[processPointsBalances] Starting balance sync...', jobId ? `(jobId: ${jobId})` : '');
   const balances = z.array(pointsBalanceSchema).parse(rawBalances);
   const tenantId = getTenantId(workspaceId);
   
   console.log('[processPointsBalances] Parsed', balances.length, 'balances for tenant:', tenantId);
+  
+  // Update job status to running
+  if (jobId) {
+    updateJobProgress(jobId, {
+      status: 'running',
+      total: balances.length,
+      processed: 0,
+      stepMessage: `Processing ${balances.length} balances...`,
+    });
+  }
   
   // Ensure tenant exists
   await prisma.tenant.upsert({
@@ -639,6 +655,7 @@ export const processPointsBalances = async (rawBalances: unknown, workspaceId?: 
   
   let updated = 0;
   let errors: string[] = [];
+  const batchSize = 50; // Update progress every 50 records
 
   for (let i = 0; i < balances.length; i++) {
     const balance = balances[i];
@@ -682,8 +699,16 @@ export const processPointsBalances = async (rawBalances: unknown, workspaceId?: 
 
       updated += 1;
       
+      // Update job progress every batch or on last item
+      if (jobId && (updated % batchSize === 0 || updated === balances.length)) {
+        updateJobProgress(jobId, {
+          processed: updated,
+          stepMessage: `Processed ${updated}/${balances.length} balances...`,
+        });
+      }
+      
       // Log progress every 50 records
-      if (updated % 50 === 0) {
+      if (updated % batchSize === 0) {
         console.log(`[processPointsBalances] Processed ${updated}/${balances.length} balances...`);
       }
     } catch (error: any) {
@@ -699,7 +724,19 @@ export const processPointsBalances = async (rawBalances: unknown, workspaceId?: 
     console.error('[processPointsBalances] Errors:', errors.slice(0, 10)); // Log first 10 errors
   }
 
-  return { updated, errors: errors.length > 0 ? errors.slice(0, 10) : undefined };
+  const result = { updated, errors: errors.length > 0 ? errors.slice(0, 10) : undefined };
+  
+  // Update job as completed
+  if (jobId) {
+    const { completeJob } = await import('./syncJobService');
+    completeJob(jobId, {
+      success: true,
+      message: `Successfully synced ${updated} points balances`,
+      count: updated,
+    });
+  }
+
+  return result;
 };
 
 // Schema for incremental points changes (new logs since last sync)

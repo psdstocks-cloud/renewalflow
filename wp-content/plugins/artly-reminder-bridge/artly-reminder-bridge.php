@@ -156,6 +156,44 @@ function artly_reminder_bridge_post_balances( array $balances ): ?array {
   return artly_reminder_bridge_post_to_api( 'artly/sync/points-balances', $balances );
 }
 
+function artly_reminder_bridge_start_balance_sync( array $balances ): ?array {
+  return artly_reminder_bridge_post_to_api( 'artly/sync/points-balances/start', $balances );
+}
+
+function artly_reminder_bridge_get_sync_status( string $job_id ): ?array {
+  $api_url = get_option( ARB_ENGINE_URL_OPTION );
+  $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
+  
+  if ( empty( $api_url ) || empty( $api_secret ) ) {
+    return null;
+  }
+  
+  $url = rtrim( $api_url, '/' ) . '/artly/sync/points-balances/status?jobId=' . urlencode( $job_id );
+  
+  $response = wp_remote_get( $url, array(
+    'headers' => array(
+      'x-artly-secret' => $api_secret,
+      'Content-Type' => 'application/json',
+    ),
+    'timeout' => 30,
+  ) );
+  
+  if ( is_wp_error( $response ) ) {
+    artly_reminder_bridge_log( 'Error checking sync status: ' . $response->get_error_message() );
+    return null;
+  }
+  
+  $code = wp_remote_retrieve_response_code( $response );
+  $body = wp_remote_retrieve_body( $response );
+  
+  if ( $code >= 300 ) {
+    artly_reminder_bridge_log( 'Failed to get sync status: ' . $code . ' - ' . $body );
+    return null;
+  }
+  
+  return json_decode( $body, true );
+}
+
 function artly_reminder_bridge_post_changes( array $changes ): ?array {
   return artly_reminder_bridge_post_to_api( 'artly/sync/points-changes', $changes );
 }
@@ -945,7 +983,39 @@ function artly_clear_sync_progress() {
 add_action( 'wp_ajax_artly_cancel_sync', 'artly_cancel_sync' );
 function artly_cancel_sync() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
+  
+  // Legacy: set cancel flag for old sync method
   update_option( ARB_SYNC_CANCEL_FLAG, true );
+  
+  // If jobId is provided, cancel via API
+  $job_id = isset( $_POST['jobId'] ) ? sanitize_text_field( $_POST['jobId'] ) : '';
+  
+  if ( ! empty( $job_id ) ) {
+    $api_url = get_option( ARB_ENGINE_URL_OPTION );
+    $api_secret = get_option( ARB_ENGINE_SECRET_OPTION );
+    
+    if ( ! empty( $api_url ) && ! empty( $api_secret ) ) {
+      $url = rtrim( $api_url, '/' ) . '/artly/sync/points-balances/cancel';
+      
+      $response = wp_remote_post( $url, array(
+        'headers' => array(
+          'x-artly-secret' => $api_secret,
+          'Content-Type' => 'application/json',
+        ),
+        'body' => json_encode( array( 'jobId' => $job_id ) ),
+        'timeout' => 30,
+      ) );
+      
+      if ( ! is_wp_error( $response ) ) {
+        $code = wp_remote_retrieve_response_code( $response );
+        if ( $code < 300 ) {
+          wp_send_json_success( array( 'message' => 'Sync cancellation requested.' ) );
+          return;
+        }
+      }
+    }
+  }
+  
   wp_send_json_success( array( 'message' => 'Sync cancellation requested.' ) );
 }
 
@@ -953,12 +1023,106 @@ add_action( 'wp_ajax_artly_start_sync_points', 'artly_start_sync_points' );
 function artly_start_sync_points() {
   check_ajax_referer( 'artly_sync_points', '_wpnonce' );
   
+  global $wpdb;
+  
   // Clear any previous progress
   delete_option( ARB_SYNC_PROGRESS_OPTION );
   
-  // Run balance sync (not events sync)
-  $result = artly_sync_points_balances_from_woo();
-  wp_send_json_success( $result );
+  if ( ! artly_reminder_bridge_points_table_exists( $wpdb ) ) {
+    wp_send_json_error( array( 'message' => 'Woo Points & Rewards table not found' ) );
+    return;
+  }
+  
+  // Collect all balances
+  $balances = array();
+  
+  if ( artly_reminder_bridge_user_points_table_exists( $wpdb ) ) {
+    $table_name = $wpdb->prefix . 'wc_points_rewards_user_points';
+    $users = $wpdb->get_results( "SELECT user_id, points_balance FROM {$table_name}" );
+    
+    foreach ( $users as $user_row ) {
+      $user = get_userdata( (int) $user_row->user_id );
+      if ( $user && ! empty( $user->user_email ) ) {
+        $balances[] = array(
+          'wp_user_id' => (int) $user_row->user_id,
+          'email' => $user->user_email,
+          'points_balance' => (int) $user_row->points_balance,
+        );
+      }
+    }
+  } else {
+    $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+    $query = "SELECT user_id, SUM(points) as balance FROM {$log_table} GROUP BY user_id";
+    $results = $wpdb->get_results( $query );
+    
+    foreach ( $results as $row ) {
+      $user = get_userdata( (int) $row->user_id );
+      if ( $user && ! empty( $user->user_email ) ) {
+        $balances[] = array(
+          'wp_user_id' => (int) $row->user_id,
+          'email' => $user->user_email,
+          'points_balance' => (int) $row->balance,
+        );
+      }
+    }
+  }
+  
+  if ( empty( $balances ) ) {
+    wp_send_json_error( array( 'message' => 'No points balances found to sync' ) );
+    return;
+  }
+  
+  // Start sync job via new API endpoint
+  $result = artly_reminder_bridge_start_balance_sync( $balances );
+  
+  if ( null === $result || ! isset( $result['jobId'] ) ) {
+    $error = get_option( ARB_LAST_SYNC_ERROR, 'Failed to start sync job' );
+    wp_send_json_error( array( 'message' => $error ) );
+    return;
+  }
+  
+  // Return jobId to frontend
+  wp_send_json_success( array(
+    'jobId' => $result['jobId'],
+    'total' => count( $balances ),
+    'message' => 'Sync job started',
+  ) );
+}
+
+add_action( 'wp_ajax_artly_get_sync_job_status', 'artly_get_sync_job_status' );
+function artly_get_sync_job_status() {
+  check_ajax_referer( 'artly_sync_points', '_wpnonce' );
+  
+  $job_id = isset( $_POST['jobId'] ) ? sanitize_text_field( $_POST['jobId'] ) : '';
+  
+  if ( empty( $job_id ) ) {
+    wp_send_json_error( array( 'message' => 'jobId is required' ) );
+    return;
+  }
+  
+  $status = artly_reminder_bridge_get_sync_status( $job_id );
+  
+  if ( null === $status ) {
+    wp_send_json_error( array( 'message' => 'Failed to get sync status' ) );
+    return;
+  }
+  
+  if ( isset( $status['success'] ) && $status['success'] && isset( $status['job'] ) ) {
+    // Map backend job status to frontend progress format
+    $job = $status['job'];
+    wp_send_json_success( array(
+      'status' => $job['status'],
+      'processed' => $job['processed'],
+      'total' => $job['total'],
+      'imported' => $job['result']['count'] ?? $job['processed'],
+      'message' => $job['stepMessage'],
+      'progress' => $job['progress'],
+      'error' => $job['error'] ?? null,
+      'result' => $job['result'] ?? null,
+    ) );
+  } else {
+    wp_send_json_error( array( 'message' => $status['error'] ?? 'Unknown error' ) );
+  }
 }
 
 add_action( 'wp_ajax_artly_start_sync_users', 'artly_start_sync_users' );
@@ -1629,15 +1793,29 @@ function artly_reminder_bridge_render_admin_page(): void {
       return new Intl.NumberFormat().format(num);
     }
 
+    let currentJobId = null;
+
     function updateProgress() {
+      if (!currentJobId) {
+        // No job ID, stop polling
+        if (syncBtn) {
+          syncBtn.disabled = false;
+        }
+        if (progressInterval) {
+          clearTimeout(progressInterval);
+        }
+        return;
+      }
+
       fetch(ajaxurl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({
-          action: 'artly_get_sync_progress',
-          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_progress' ); ?>',
+          action: 'artly_get_sync_job_status',
+          jobId: currentJobId,
+          _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
         }),
       })
       .then(response => response.json())
@@ -1645,20 +1823,20 @@ function artly_reminder_bridge_render_admin_page(): void {
         if (data.success && data.data) {
           const progress = data.data;
           
-          if (progress.status === 'running') {
+          if (progress.status === 'running' || progress.status === 'pending') {
             progressDiv.style.display = 'block';
             progressMessage.textContent = progress.message || 'Syncing...';
             
-            const percentage = progress.total > 0 
+            const percentage = progress.progress || (progress.total > 0 
               ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
-              : 0;
+              : 0);
             
             progressBar.style.width = percentage + '%';
             progressPercentage.textContent = percentage + '%';
             
-            const processed = formatNumber(progress.processed);
-            const total = formatNumber(progress.total);
-            const imported = formatNumber(progress.imported);
+            const processed = formatNumber(progress.processed || 0);
+            const total = formatNumber(progress.total || 0);
+            const imported = formatNumber(progress.imported || progress.processed || 0);
             
             progressDetails.innerHTML = `
               <strong>Processed:</strong> ${processed} / ${total} users<br>
@@ -1666,20 +1844,20 @@ function artly_reminder_bridge_render_admin_page(): void {
               <strong>Progress:</strong> ${percentage}% complete
             `;
             
-            // Continue polling
+            // Continue polling every 1-2 seconds
             if (progressInterval) {
               clearTimeout(progressInterval);
             }
-            progressInterval = setTimeout(updateProgress, 800);
+            progressInterval = setTimeout(updateProgress, 1500);
           } else if (progress.status === 'completed') {
             progressDiv.style.display = 'block';
-            progressMessage.textContent = progress.message || '✅ Sync completed successfully!';
+            progressMessage.textContent = progress.message || progress.result?.message || '✅ Sync completed successfully!';
             progressBar.style.width = '100%';
             progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
             progressPercentage.textContent = '100%';
             
-            const processed = formatNumber(progress.processed);
-            const imported = formatNumber(progress.imported);
+            const processed = formatNumber(progress.processed || 0);
+            const imported = formatNumber(progress.imported || progress.result?.count || 0);
             
             progressDetails.innerHTML = `
               <strong style="color: #46b450;">✓ Completed!</strong><br>
@@ -1691,10 +1869,15 @@ function artly_reminder_bridge_render_admin_page(): void {
               syncBtn.disabled = false;
               syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
             }
+            if (cancelBtn) {
+              cancelBtn.style.display = 'none';
+            }
             
             if (progressInterval) {
               clearTimeout(progressInterval);
             }
+            
+            currentJobId = null; // Clear job ID
             
             // Clear progress after 8 seconds
             setTimeout(() => {
@@ -1702,9 +1885,9 @@ function artly_reminder_bridge_render_admin_page(): void {
               // Reload page to update the count
               location.reload();
             }, 8000);
-          } else if (progress.status === 'error') {
+          } else if (progress.status === 'failed' || progress.status === 'error') {
             progressDiv.style.display = 'block';
-            progressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+            progressMessage.textContent = '❌ ' + (progress.error || progress.message || 'Sync failed!');
             progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
             
             const processed = formatNumber(progress.processed || 0);
@@ -1712,38 +1895,10 @@ function artly_reminder_bridge_render_admin_page(): void {
             
             progressDetails.innerHTML = `
               <strong style="color: #dc3232;">✗ Error occurred</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} users
+              <strong>Processed:</strong> ${processed} / ${total} users<br>
+              <strong>Error:</strong> ${progress.error || progress.message || 'Unknown error'}
             `;
             
-            if (syncBtn) {
-              syncBtn.disabled = false;
-              syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
-            }
-            
-            if (progressInterval) {
-              clearTimeout(progressInterval);
-            }
-          } else {
-            // No active sync, stop polling
-            if (syncBtn) {
-              syncBtn.disabled = false;
-            }
-            if (progressInterval) {
-              clearTimeout(progressInterval);
-            }
-          }
-        } else {
-          // No progress data, stop polling
-          if (syncBtn) {
-            syncBtn.disabled = false;
-          }
-          if (progressInterval) {
-            clearTimeout(progressInterval);
-          }
-        }
-      })
-      .catch(error => {
-        console.error('Error fetching progress:', error);
             if (syncBtn) {
               syncBtn.disabled = false;
               syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
@@ -1751,9 +1906,68 @@ function artly_reminder_bridge_render_admin_page(): void {
             if (cancelBtn) {
               cancelBtn.style.display = 'none';
             }
+            
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
+            
+            currentJobId = null; // Clear job ID
+          } else if (progress.status === 'cancelled') {
+            progressDiv.style.display = 'block';
+            progressMessage.textContent = '⚠️ Sync cancelled';
+            progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+            
+            if (syncBtn) {
+              syncBtn.disabled = false;
+              syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
+            }
+            if (cancelBtn) {
+              cancelBtn.style.display = 'none';
+            }
+            
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
+            
+            currentJobId = null; // Clear job ID
+          } else {
+            // Unknown status, stop polling
+            if (syncBtn) {
+              syncBtn.disabled = false;
+            }
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
+            currentJobId = null;
+          }
+        } else {
+          // Error response, stop polling
+          if (syncBtn) {
+            syncBtn.disabled = false;
+            syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
+          }
+          if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+          }
+          if (progressInterval) {
+            clearTimeout(progressInterval);
+          }
+          currentJobId = null;
+        }
+      })
+      .catch(error => {
+        console.error('Error fetching progress:', error);
+        if (syncBtn) {
+          syncBtn.disabled = false;
+          syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
+        }
+        if (cancelBtn) {
+          cancelBtn.style.display = 'none';
+        }
         if (progressInterval) {
           clearTimeout(progressInterval);
         }
+        currentJobId = null;
       });
     }
 
@@ -1796,11 +2010,8 @@ function artly_reminder_bridge_render_admin_page(): void {
             }
             isCancelled = false;
             
-            // Start polling immediately (sync runs in background)
-            updateProgress();
-            
-            // Start the sync via AJAX
-            const syncPromise = fetch(ajaxurl, {
+            // Start the sync via AJAX to get jobId
+            fetch(ajaxurl, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -1809,26 +2020,23 @@ function artly_reminder_bridge_render_admin_page(): void {
                 action: 'artly_start_sync_points',
                 _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
               }),
-            });
-            
-            syncPromise
+            })
             .then(response => response.json())
             .then(data => {
               if (isCancelled) {
-                progressMessage.textContent = '⚠️ Sync was cancelled.';
-                progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
                 return;
               }
               
-              if (data.success) {
-                // Polling will handle progress updates, don't override here
-                // Just let polling continue to show real-time progress
+              if (data.success && data.data && data.data.jobId) {
+                // Store jobId and start polling
+                currentJobId = data.data.jobId;
+                updateProgress(); // Start polling immediately
               } else {
-                // Stop polling on immediate error
+                // Error starting sync
                 if (progressInterval) {
                   clearTimeout(progressInterval);
                 }
-                progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed to start');
                 progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
                 syncBtn.disabled = false;
                 syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
@@ -1923,21 +2131,32 @@ function artly_reminder_bridge_render_admin_page(): void {
         if (confirm('Are you sure you want to cancel the sync?')) {
           isCancelled = true;
           
-          // Send cancel request
+          // Send cancel request with jobId if available
+          const cancelParams = {
+            action: 'artly_cancel_sync',
+            _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
+          };
+          
+          if (currentJobId) {
+            cancelParams.jobId = currentJobId;
+          }
+          
           fetch(ajaxurl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: new URLSearchParams({
-              action: 'artly_cancel_sync',
-              _wpnonce: '<?php echo wp_create_nonce( 'artly_sync_points' ); ?>',
-            }),
+            body: new URLSearchParams(cancelParams),
           })
           .then(() => {
             progressMessage.textContent = '⚠️ Cancelling sync...';
             cancelBtn.disabled = true;
             cancelBtn.textContent = 'Cancelling...';
+            
+            // Stop polling
+            if (progressInterval) {
+              clearTimeout(progressInterval);
+            }
             
             // Wait a moment then update UI
             setTimeout(() => {
@@ -1946,6 +2165,7 @@ function artly_reminder_bridge_render_admin_page(): void {
               syncBtn.disabled = false;
               syncBtn.textContent = '<?php esc_html_e( 'Sync Points Balances', 'artly-reminder-bridge' ); ?>';
               cancelBtn.style.display = 'none';
+              currentJobId = null;
               cancelBtn.disabled = false;
               cancelBtn.textContent = '<?php esc_html_e( 'Cancel Sync', 'artly-reminder-bridge' ); ?>';
             }, 1000);
