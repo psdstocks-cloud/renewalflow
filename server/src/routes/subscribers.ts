@@ -32,7 +32,25 @@ subscriberRouter.get('/api/subscribers/stats', async (_req, res, next) => {
 
 subscriberRouter.get('/api/subscribers', async (req, res, next) => {
   try {
-    const { status, search, skip, take } = req.query;
+    const {
+      q,
+      status,
+      source,
+      tag,
+      nextRenewalFrom,
+      nextRenewalTo,
+      expiringInDays,
+      hasPhone,
+      page,
+      pageSize,
+      sortBy,
+      sortDir,
+      // Legacy params for backward compatibility
+      search,
+      skip,
+      take,
+    } = req.query;
+
     const user = (req as any).user;
     if (!user || !user.id) {
       return res.status(401).json({ message: 'User not authenticated' });
@@ -46,13 +64,27 @@ subscriberRouter.get('/api/subscribers', async (req, res, next) => {
       return res.status(404).json({ message: 'Workspace not found for user' });
     }
 
+    // Support both new and legacy params
+    const searchQuery = (q as string) || (search as string);
+    const skipValue = skip ? Number(skip) : page ? (Number(page) - 1) * (pageSize ? Number(pageSize) : 25) : undefined;
+    const takeValue = take ? Number(take) : pageSize ? Number(pageSize) : undefined;
+
     const result = await listSubscribers({
+      workspaceId: workspaceUser.workspaceId,
+      q: searchQuery,
       status: status as string | undefined,
-      search: search as string | undefined,
-      skip: skip ? Number(skip) : undefined,
-      take: take ? Number(take) : undefined,
-      workspaceId: workspaceUser.workspaceId
+      source: source as string | undefined,
+      tag: tag as string | undefined,
+      nextRenewalFrom: nextRenewalFrom ? (nextRenewalFrom as string) : undefined,
+      nextRenewalTo: nextRenewalTo ? (nextRenewalTo as string) : undefined,
+      expiringInDays: expiringInDays ? Number(expiringInDays) : undefined,
+      hasPhone: hasPhone === 'true' ? true : hasPhone === 'false' ? false : undefined,
+      skip: skipValue,
+      take: takeValue,
+      sortBy: sortBy as string | undefined,
+      sortDir: (sortDir as 'asc' | 'desc') || 'asc',
     });
+
     res.json(result);
   } catch (error) {
     next(error);

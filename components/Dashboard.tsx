@@ -17,8 +17,9 @@ import {
   WebsiteConnection,
 } from '@/src/types';
 import { apiFetch } from '@/src/services/apiClient';
+import { fetchSubscribers, SubscribersQueryParams } from '@/src/services/subscribersService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/src/context/AuthContext';
 
 interface SubscriberFormState {
@@ -72,10 +73,21 @@ const statusLabels: Record<SubscriptionStatus, string> = {
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { signOut } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [subscribersTotal, setSubscribersTotal] = useState(0);
   const [subscribersPage, setSubscribersPage] = useState(1);
-  const [subscribersPerPage] = useState(50);
+  const [subscribersPerPage] = useState(25);
+  const [subscribersLoading, setSubscribersLoading] = useState(false);
+  
+  // Filter state
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') || '');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue'>(() => {
+    const filter = searchParams.get('filter') || 'all';
+    return ['all', 'active', 'expiring_7', 'expiring_30', 'overdue'].includes(filter) ? filter as any : 'all';
+  });
+  const [sortBy, setSortBy] = useState(() => searchParams.get('sortBy') || 'endDate');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() => (searchParams.get('sortDir') || 'asc') as 'asc' | 'desc');
   const [subscriberStats, setSubscriberStats] = useState<SubscriberStats | null>(null);
   const [reminderTasks, setReminderTasks] = useState<ReminderTask[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
@@ -231,14 +243,116 @@ const Dashboard: React.FC = () => {
     }
   }, [activeTab]);
 
+  // Debounced search effect
+  useEffect(() => {
+    if (activeTab !== 'subscribers') return;
+    
+    const timeoutId = setTimeout(() => {
+      loadSubscribers(1); // Reset to page 1 when search changes
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, quickFilter, sortBy, sortDir, activeTab]);
+
+  // Load initial filters from URL on mount
+  useEffect(() => {
+    if (activeTab === 'subscribers') {
+      const urlQ = searchParams.get('q');
+      const urlFilter = searchParams.get('filter');
+      const urlPage = searchParams.get('page');
+      const urlSortBy = searchParams.get('sortBy');
+      const urlSortDir = searchParams.get('sortDir');
+      
+      if (urlQ) setSearchQuery(urlQ);
+      if (urlFilter && ['all', 'active', 'expiring_7', 'expiring_30', 'overdue'].includes(urlFilter)) {
+        setQuickFilter(urlFilter as any);
+      }
+      if (urlPage) setSubscribersPage(Number(urlPage));
+      if (urlSortBy) setSortBy(urlSortBy);
+      if (urlSortDir && ['asc', 'desc'].includes(urlSortDir)) setSortDir(urlSortDir as 'asc' | 'desc');
+    }
+  }, []);
+
+  // Build query params from filter state
+  const buildSubscriberQuery = (page: number = subscribersPage): SubscribersQueryParams => {
+    const params: SubscribersQueryParams = {
+      page,
+      pageSize: subscribersPerPage,
+      sortBy,
+      sortDir,
+    };
+
+    if (searchQuery) {
+      params.q = searchQuery;
+    }
+
+    // Apply quick filter
+    switch (quickFilter) {
+      case 'active':
+        params.status = 'ACTIVE';
+        break;
+      case 'expiring_7':
+        params.status = 'ACTIVE';
+        params.expiringInDays = 7;
+        break;
+      case 'expiring_30':
+        params.status = 'ACTIVE';
+        params.expiringInDays = 30;
+        break;
+      case 'overdue':
+        params.status = 'ACTIVE';
+        params.nextRenewalTo = new Date().toISOString();
+        break;
+      case 'all':
+      default:
+        // No additional filters
+        break;
+    }
+
+    return params;
+  };
+
+  const loadSubscribers = async (page: number = subscribersPage) => {
+    setSubscribersLoading(true);
+    try {
+      const params = buildSubscriberQuery(page);
+      const subscriberRes = await fetchSubscribers(params);
+      
+      // Handle both new format (data/meta) and legacy format (items/total)
+      const items = subscriberRes.data || subscriberRes.items || [];
+      const total = subscriberRes.meta?.totalItems || subscriberRes.total || 0;
+      
+      setSubscribers(items);
+      setSubscribersTotal(total);
+      setSubscribersPage(page);
+      
+      // Update URL params
+      const newParams = new URLSearchParams(searchParams);
+      if (searchQuery) newParams.set('q', searchQuery);
+      else newParams.delete('q');
+      newParams.set('filter', quickFilter);
+      newParams.set('page', String(page));
+      newParams.set('sortBy', sortBy);
+      newParams.set('sortDir', sortDir);
+      setSearchParams(newParams, { replace: true });
+      
+      // Scroll to top of table
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      console.error(err);
+      setError('Unable to load subscribers.');
+    } finally {
+      setSubscribersLoading(false);
+    }
+  };
+
   const loadInitialData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const skip = (subscribersPage - 1) * subscribersPerPage;
-      const [settingsRes, subscriberRes, statsRes, logsRes] = await Promise.all([
+      const [settingsRes, statsRes, logsRes] = await Promise.all([
         apiFetch<AppSettings>('/api/settings'),
-        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
         apiFetch<EmailLog[]>('/api/reminders/logs?limit=100'),
       ]);
@@ -252,10 +366,11 @@ const Dashboard: React.FC = () => {
       setEmailTemplate(template);
       setWooSettings(woo);
       setAdminWhatsApp(whatsapp);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
       setSubscriberStats(statsRes);
       setEmailLogs(logsRes);
+      
+      // Load subscribers with current filters
+      await loadSubscribers();
     } catch (err) {
       console.error(err);
       setError('Failed to load data from server.');
@@ -266,14 +381,11 @@ const Dashboard: React.FC = () => {
 
   const refreshSubscribersAndStats = async () => {
     try {
-      const skip = (subscribersPage - 1) * subscribersPerPage;
-      const [subscriberRes, statsRes] = await Promise.all([
-        apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`),
+      const [statsRes] = await Promise.all([
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
       ]);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
       setSubscriberStats(statsRes);
+      await loadSubscribers();
     } catch (err) {
       console.error(err);
       setError('Unable to refresh subscribers.');
@@ -281,18 +393,7 @@ const Dashboard: React.FC = () => {
   };
 
   const loadSubscribersPage = async (page: number) => {
-    setSubscribersPage(page);
-    try {
-      const skip = (page - 1) * subscribersPerPage;
-      const subscriberRes = await apiFetch<SubscribersResponse>(`/api/subscribers?skip=${skip}&take=${subscribersPerPage}`);
-      setSubscribers(subscriberRes.items);
-      setSubscribersTotal(subscriberRes.total);
-      // Scroll to top of table
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (err) {
-      console.error(err);
-      setError('Unable to load subscribers.');
-    }
+    await loadSubscribers(page);
   };
 
   const loadReminderTasks = async () => {
@@ -918,6 +1019,17 @@ const Dashboard: React.FC = () => {
             currentPage={subscribersPage}
             perPage={subscribersPerPage}
             onPageChange={loadSubscribersPage}
+            isLoading={subscribersLoading}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            quickFilter={quickFilter}
+            onQuickFilterChange={setQuickFilter}
+            sortBy={sortBy}
+            sortDir={sortDir}
+            onSortChange={(by, dir) => {
+              setSortBy(by);
+              setSortDir(dir);
+            }}
           />
         )}
 
@@ -1199,6 +1311,14 @@ const SubscribersTab = ({
   currentPage,
   perPage,
   onPageChange,
+  isLoading,
+  searchQuery,
+  onSearchChange,
+  quickFilter,
+  onQuickFilterChange,
+  sortBy,
+  sortDir,
+  onSortChange,
 }: {
   subscribers: Subscriber[];
   reminderConfig: ReminderConfig;
@@ -1223,6 +1343,14 @@ const SubscribersTab = ({
   currentPage: number;
   perPage: number;
   onPageChange: (page: number) => void;
+  isLoading?: boolean;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+  quickFilter?: 'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue';
+  onQuickFilterChange?: (filter: 'all' | 'active' | 'expiring_7' | 'expiring_30' | 'overdue') => void;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+  onSortChange?: (by: string, dir: 'asc' | 'desc') => void;
 }) => {
   const totalPages = Math.ceil(total / perPage);
   const startItem = (currentPage - 1) * perPage + 1;
@@ -1230,7 +1358,7 @@ const SubscribersTab = ({
 
   return (
   <div className="max-w-7xl mx-auto animate-fade-in-up">
-    <div className="flex justify-between items-center mb-8">
+    <div className="flex justify-between items-center mb-6">
       <div>
         <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Subscribers ({total})</h1>
         {lastSyncTime && !isSyncingFromWordPress && (
@@ -1268,6 +1396,89 @@ const SubscribersTab = ({
         <button onClick={onImport} className="bg-dark text-white px-6 py-3 rounded-xl hover:bg-gray-800 shadow-lg shadow-gray-300 flex items-center gap-2 font-bold transition-all transform hover:-translate-y-1">
           <i className="fas fa-file-import"></i> Import CSV
         </button>
+      </div>
+    </div>
+
+    {/* Search and Filters Section */}
+    <div className="mb-6 space-y-4">
+      {/* Search Bar */}
+      <div className="relative">
+        <label htmlFor="subscriber-search" className="sr-only">Search subscribers</label>
+        <div className="relative">
+          <i className="fas fa-search absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+          <input
+            id="subscriber-search"
+            type="text"
+            placeholder="Search by name, email, domain, Woo user ID..."
+            value={searchQuery || ''}
+            onChange={(e) => onSearchChange?.(e.target.value)}
+            className="w-full pl-12 pr-12 py-3 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-gray-900 placeholder-gray-400"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => onSearchChange?.('')}
+              className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              aria-label="Clear search"
+            >
+              <i className="fas fa-times"></i>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Filter Chips and Sort */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-gray-700">Quick filters:</span>
+          {(['all', 'active', 'expiring_7', 'expiring_30', 'overdue'] as const).map((filter) => {
+            const labels: Record<typeof filter, string> = {
+              all: 'All',
+              active: 'Active',
+              expiring_7: 'Expiring in 7 days',
+              expiring_30: 'Expiring in 30 days',
+              overdue: 'Overdue',
+            };
+            const isActive = quickFilter === filter;
+            return (
+              <button
+                key={filter}
+                onClick={() => onQuickFilterChange?.(filter)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-primary text-white shadow-md'
+                    : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {labels[filter]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Sort Controls */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="sort-by" className="text-sm font-semibold text-gray-700">Sort by:</label>
+          <select
+            id="sort-by"
+            value={sortBy || 'endDate'}
+            onChange={(e) => onSortChange?.(e.target.value, sortDir || 'asc')}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+          >
+            <option value="endDate">Next Renewal</option>
+            <option value="createdAt">Created At</option>
+            <option value="lastPurchaseDate">Last Purchase</option>
+            <option value="lastNotifiedAt">Last Email Sent</option>
+            <option value="pointsRemaining">Points</option>
+            <option value="amount">Amount</option>
+          </select>
+          <button
+            onClick={() => onSortChange?.(sortBy || 'endDate', sortDir === 'asc' ? 'desc' : 'asc')}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+            title={sortDir === 'asc' ? 'Sort descending' : 'Sort ascending'}
+          >
+            <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`}></i>
+          </button>
+        </div>
       </div>
     </div>
     
@@ -1383,7 +1594,65 @@ const SubscribersTab = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {subscribers.map((sub) => {
+            {isLoading ? (
+              // Loading skeleton
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={`skeleton-${i}`} className="animate-pulse">
+                  <td className="px-8 py-5">
+                    <div className="h-4 bg-gray-200 rounded w-32 mb-2"></div>
+                    <div className="h-3 bg-gray-200 rounded w-48"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-6 bg-gray-200 rounded-full w-20"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 bg-gray-200 rounded w-24"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 bg-gray-200 rounded w-16"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 bg-gray-200 rounded w-28"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-4 bg-gray-200 rounded w-24"></div>
+                  </td>
+                  <td className="px-8 py-5">
+                    <div className="h-8 bg-gray-200 rounded w-16 ml-auto"></div>
+                  </td>
+                </tr>
+              ))
+            ) : subscribers.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="p-12 text-center">
+                  <div className="flex flex-col items-center justify-center">
+                    <i className="fas fa-folder-open text-6xl text-gray-300 mb-4"></i>
+                    <p className="text-lg font-semibold text-gray-700 mb-2">
+                      {searchQuery || quickFilter !== 'all' 
+                        ? 'No subscribers match your filters' 
+                        : 'No subscribers found'}
+                    </p>
+                    <p className="text-sm text-gray-500 mb-4">
+                      {searchQuery || quickFilter !== 'all'
+                        ? 'Try adjusting your search or filters'
+                        : 'Import a CSV or sync from WordPress to get started'}
+                    </p>
+                    {(searchQuery || quickFilter !== 'all') && (
+                      <button
+                        onClick={() => {
+                          onSearchChange?.('');
+                          onQuickFilterChange?.('all');
+                        }}
+                        className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-indigo-600 transition-colors text-sm font-medium"
+                      >
+                        Clear Filters
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              subscribers.map((sub) => {
               const daysUntilExpiry = Math.ceil((new Date(sub.endDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
               const isExpiringSoon = sub.status === 'ACTIVE' && daysUntilExpiry <= reminderConfig.firstReminderDays && daysUntilExpiry > 0;
               
@@ -1472,25 +1741,20 @@ const SubscribersTab = ({
                   </td>
                 </tr>
               );
-            })}
-            {subscribers.length === 0 && (
-              <tr>
-                <td colSpan={7} className="p-12 text-center text-gray-400">
-                  <i className="fas fa-folder-open text-4xl mb-4 opacity-30"></i>
-                  <p>No subscribers found. Import a CSV to get started.</p>
-                </td>
-              </tr>
-            )}
+            }))}
           </tbody>
         </table>
       </div>
       
       {/* Pagination Controls */}
-      {totalPages > 1 && (
+      {totalPages > 1 && !isLoading && (
         <div className="px-8 py-6 border-t border-gray-100 bg-gray-50/50">
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-600">
               Showing <span className="font-bold text-gray-900">{startItem}</span> to <span className="font-bold text-gray-900">{endItem}</span> of <span className="font-bold text-gray-900">{total}</span> subscribers
+              {searchQuery && (
+                <span className="ml-2 text-gray-500">(filtered)</span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button

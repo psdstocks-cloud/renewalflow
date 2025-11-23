@@ -32,5 +32,22 @@ export async function fetchSubscribers(params: SubscribersQueryParams = {}): Pro
   if (params.sortBy) query.set('sortBy', params.sortBy);
   if (params.sortDir) query.set('sortDir', params.sortDir);
 
-  return apiFetch(`/api/subscribers?${query.toString()}`);
+  const response = await apiFetch<SubscribersResponse>(`/api/subscribers?${query.toString()}`);
+  
+  // Handle backward compatibility with legacy format
+  if (response.items && response.total !== undefined) {
+    return {
+      data: response.items,
+      meta: {
+        page: params.page ?? 1,
+        pageSize: params.pageSize ?? 25,
+        totalItems: response.total,
+        totalPages: Math.ceil(response.total / (params.pageSize ?? 25)),
+        hasNextPage: (params.page ?? 1) < Math.ceil(response.total / (params.pageSize ?? 25)),
+        hasPrevPage: (params.page ?? 1) > 1,
+      },
+    };
+  }
+  
+  return response;
 }

@@ -81,8 +81,18 @@ export interface SubscriberStats {
 }
 
 export interface SubscribersResponse {
-  items: Subscriber[];
-  total: number;
+  data: Subscriber[];
+  meta: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
+  // Legacy format for backward compatibility
+  items?: Subscriber[];
+  total?: number;
 }
 
 export interface ReminderSendResponse {

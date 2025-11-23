@@ -22,23 +22,132 @@ const subscriberSchema = z.object({
 
 export type SubscriberInput = z.infer<typeof subscriberSchema>;
 
-export async function listSubscribers(params: { status?: string; search?: string; skip?: number; take?: number; workspaceId: string }) {
-  const { status, search, skip = 0, take = 50, workspaceId } = params;
-  const where: any = { workspaceId }; // Filter by workspaceId
+export interface ListSubscribersParams {
+  workspaceId: string;
+  q?: string; // Free-text search
+  status?: string;
+  source?: string; // Not in schema yet, but prepare for it
+  tag?: string; // Not in schema yet, but prepare for it
+  nextRenewalFrom?: Date | string;
+  nextRenewalTo?: Date | string;
+  expiringInDays?: number;
+  hasPhone?: boolean;
+  skip?: number;
+  take?: number;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+}
+
+export async function listSubscribers(params: ListSubscribersParams) {
+  const {
+    workspaceId,
+    q,
+    status,
+    source, // Reserved for future use
+    tag, // Reserved for future use
+    nextRenewalFrom,
+    nextRenewalTo,
+    expiringInDays,
+    hasPhone,
+    skip = 0,
+    take = 25,
+    sortBy = 'endDate',
+    sortDir = 'asc',
+  } = params;
+
+  const where: any = { workspaceId };
+
+  // Free-text search across multiple fields
+  if (q) {
+    where.OR = [
+      { name: { contains: q, mode: 'insensitive' } },
+      { email: { contains: q, mode: 'insensitive' } },
+      { planName: { contains: q, mode: 'insensitive' } },
+    ];
+  }
+
+  // Status filter
   if (status) {
     where.status = status;
   }
-  if (search) {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } }
-    ];
+
+  // Source filter (reserved for future schema addition)
+  // if (source) {
+  //   where.source = source;
+  // }
+
+  // Tag filter (reserved for future schema addition)
+  // if (tag) {
+  //   where.tags = { has: tag };
+  // }
+
+  // Date range filter for next renewal (using endDate as proxy)
+  if (nextRenewalFrom || nextRenewalTo) {
+    where.endDate = {};
+    if (nextRenewalFrom) {
+      where.endDate.gte = typeof nextRenewalFrom === 'string' ? new Date(nextRenewalFrom) : nextRenewalFrom;
+    }
+    if (nextRenewalTo) {
+      where.endDate.lte = typeof nextRenewalTo === 'string' ? new Date(nextRenewalTo) : nextRenewalTo;
+    }
   }
+
+  // Convenience filter: expiring in N days
+  if (expiringInDays !== undefined) {
+    const now = new Date();
+    const futureDate = new Date();
+    futureDate.setDate(now.getDate() + expiringInDays);
+    where.endDate = {
+      gte: now,
+      lte: futureDate,
+    };
+    // Also filter to active status for expiring soon
+    if (!status) {
+      where.status = 'ACTIVE';
+    }
+  }
+
+  // Phone filter
+  if (hasPhone !== undefined) {
+    if (hasPhone) {
+      where.phone = { not: null };
+    } else {
+      where.phone = null;
+    }
+  }
+
+  // Sorting - whitelist allowed fields
+  const allowedSortFields = ['endDate', 'createdAt', 'lastPurchaseDate', 'lastNotifiedAt', 'pointsRemaining', 'amount'];
+  const sortBySafe = allowedSortFields.includes(sortBy) ? sortBy : 'endDate';
+  const orderBy: any = { [sortBySafe]: sortDir === 'desc' ? 'desc' : 'asc' };
+
+  // Pagination
+  const page = Math.max(1, Math.floor(skip / take) + 1);
+  const pageSize = Math.min(100, Math.max(1, take));
+
   const [items, total] = await Promise.all([
-    prisma.subscriber.findMany({ where, skip, take, orderBy: { createdAt: 'desc' } }),
-    prisma.subscriber.count({ where })
+    prisma.subscriber.findMany({
+      where,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      orderBy,
+    }),
+    prisma.subscriber.count({ where }),
   ]);
-  return { items, total };
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  return {
+    data: items,
+    meta: {
+      page,
+      pageSize,
+      totalItems: total,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
+    },
+  };
 }
 
 export function getSubscriber(id: string) {
