@@ -634,9 +634,9 @@ export const processPointsBalances = async (
   
   // Update job status to running
   if (jobId) {
+    // Note: total is set when creating the job, we only update progress/processed here
     updateJobProgress(jobId, {
       status: 'running',
-      total: balances.length,
       processed: 0,
       stepMessage: `Processing ${balances.length} balances...`,
     });

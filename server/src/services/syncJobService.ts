@@ -73,7 +73,7 @@ export function getSyncJob(jobId: string): SyncJob | null {
  */
 export function updateJobProgress(
   jobId: string,
-  updates: Partial<Pick<SyncJob, 'status' | 'progress' | 'processed' | 'stepMessage' | 'error' | 'result'>>
+  updates: Partial<Pick<SyncJob, 'status' | 'progress' | 'total' | 'processed' | 'stepMessage' | 'error' | 'result'>>
 ): SyncJob | null {
   const job = jobStore.get(jobId);
   if (!job) {

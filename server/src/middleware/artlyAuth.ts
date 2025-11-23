@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env';
 import { validateWorkspaceApiKey } from '../services/workspaceApiKeyService';
+import { prisma } from '../config/db';
 
 export const artlyAuth = async (req: Request, res: Response, next: NextFunction) => {
   console.log('[artlyAuth] ===== MIDDLEWARE CALLED =====');
@@ -39,8 +40,32 @@ export const artlyAuth = async (req: Request, res: Response, next: NextFunction)
         return next();
       }
       
-      console.log('[artlyAuth] Invalid API key - not found in database or inactive');
+      console.log('[artlyAuth] ❌ Invalid API key - not found in database or inactive');
+      console.log('[artlyAuth] API key provided (first 30 chars):', apiKey ? apiKey.substring(0, 30) : 'N/A');
+      console.log('[artlyAuth] API key length:', apiKey ? apiKey.length : 0);
+      console.log('[artlyAuth] Checking database for matching key...');
+      
+      // Try to find similar keys for debugging
+      try {
+        const allConnections = await prisma.websiteConnection.findMany({
+          select: { apiKey: true, websiteUrl: true, isActive: true },
+          take: 5,
+        });
+        console.log('[artlyAuth] Found', allConnections.length, 'connections in database');
+        allConnections.forEach((conn, i) => {
+          console.log(`[artlyAuth] Connection ${i + 1}:`, {
+            keyPrefix: conn.apiKey.substring(0, 30),
+            keyLength: conn.apiKey.length,
+            isActive: conn.isActive,
+            websiteUrl: conn.websiteUrl,
+          });
+        });
+      } catch (dbError: any) {
+        console.error('[artlyAuth] Error checking database:', dbError.message);
+      }
+      
       return res.status(401).json({ 
+        message: 'Unauthorized',
         error: 'Invalid API key. Please check: 1) The API key matches the one in your RenewalFlow dashboard, 2) The database migration has been run (WebsiteConnection table exists), 3) The connection is active.' 
       });
     }

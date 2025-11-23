@@ -111,18 +111,39 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
   }
 });
 
+// Test endpoint to verify route registration (NO AUTH for debugging)
+artlyRouter.post('/artly/sync/points-balances/start/test', async (req, res) => {
+  res.json({ 
+    message: 'Route /artly/sync/points-balances/start is registered',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // New job-based endpoints for points balance sync
 artlyRouter.post('/artly/sync/points-balances/start', artlyAuth, async (req, res, next) => {
   try {
     const workspaceId = (req as any).workspaceId;
     const balances = Array.isArray(req.body) ? req.body : [];
     
-    console.log('[artly/sync/points-balances/start] Received balance sync request');
+    console.log('[artly/sync/points-balances/start] ===== ENDPOINT CALLED =====');
     console.log('[artly/sync/points-balances/start] WorkspaceId:', workspaceId);
     console.log('[artly/sync/points-balances/start] Body length:', balances.length);
+    console.log('[artly/sync/points-balances/start] Headers:', {
+      'x-artly-secret': req.headers['x-artly-secret'] ? 'present' : 'missing',
+      'content-type': req.headers['content-type'],
+    });
+    
+    // workspaceId should always be set by artlyAuth middleware (or null for legacy mode)
+    // If it's undefined, something went wrong with auth
+    if (workspaceId === undefined) {
+      console.error('[artly/sync/points-balances/start] workspaceId is undefined - auth middleware may have failed');
+      return res.status(401).json({ message: 'Unauthorized', error: 'Authentication failed' });
+    }
     
     // Create sync job
     const job = createSyncJob('points-balances', workspaceId, balances.length);
+    
+    console.log('[artly/sync/points-balances/start] Created job:', job.jobId);
     
     // Start async processing (don't await)
     processPointsBalances(balances, workspaceId, job.jobId).catch((error) => {
@@ -131,6 +152,7 @@ artlyRouter.post('/artly/sync/points-balances/start', artlyAuth, async (req, res
     });
     
     // Return jobId immediately
+    console.log('[artly/sync/points-balances/start] Returning jobId:', job.jobId);
     res.json({
       success: true,
       jobId: job.jobId,

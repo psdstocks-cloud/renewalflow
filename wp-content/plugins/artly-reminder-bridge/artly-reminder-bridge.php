@@ -136,9 +136,15 @@ function artly_reminder_bridge_post_to_api( string $endpoint, array $payload ): 
     $error_msg = 'Sync to ' . $endpoint . ' failed with status ' . $code;
     if ( $code === 401 ) {
       $error_msg .= ' - Unauthorized. Please check your API key is correct and matches the one in your RenewalFlow dashboard.';
+      $error_msg .= ' If the server was recently updated, it may need to be restarted to register new routes.';
+    } else if ( $code === 404 ) {
+      $error_msg .= ' - Endpoint not found. The server may need to be restarted to register new routes.';
     }
     $error_msg .= ' Response: ' . $body;
     artly_reminder_bridge_log( $error_msg );
+    artly_reminder_bridge_log( 'Request URL: ' . $full_url );
+    artly_reminder_bridge_log( 'API Key length: ' . strlen( $api_secret ) );
+    artly_reminder_bridge_log( 'API Key prefix: ' . substr( $api_secret, 0, 30 ) );
     update_option( ARB_LAST_SYNC_ERROR, $error_msg );
     return null;
   }
@@ -1072,13 +1078,42 @@ function artly_start_sync_points() {
     return;
   }
   
-  // Start sync job via new API endpoint
+  // Try new job-based API endpoint first
   $result = artly_reminder_bridge_start_balance_sync( $balances );
   
+  // If new endpoint fails (404 or 401), fall back to legacy endpoint
   if ( null === $result || ! isset( $result['jobId'] ) ) {
-    $error = get_option( ARB_LAST_SYNC_ERROR, 'Failed to start sync job' );
-    wp_send_json_error( array( 'message' => $error ) );
-    return;
+    $last_error = get_option( ARB_LAST_SYNC_ERROR, '' );
+    
+    // Check if it's a 404 (endpoint not found) or 401 (auth issue)
+    $is_404 = strpos( $last_error, '404' ) !== false || strpos( $last_error, 'not found' ) !== false;
+    $is_401 = strpos( $last_error, '401' ) !== false || strpos( $last_error, 'Unauthorized' ) !== false;
+    
+    if ( $is_404 ) {
+      // New endpoint doesn't exist yet, fall back to legacy sync
+      artly_reminder_bridge_log( 'New job-based endpoint not available, falling back to legacy sync' );
+      $legacy_result = artly_sync_points_balances_from_woo();
+      
+      if ( $legacy_result['success'] ) {
+        wp_send_json_success( array(
+          'message' => $legacy_result['message'],
+          'count' => $legacy_result['count'],
+          'legacy' => true, // Indicate this used legacy endpoint
+        ) );
+      } else {
+        wp_send_json_error( array( 'message' => $legacy_result['message'] ) );
+      }
+      return;
+    } else if ( $is_401 ) {
+      // Authentication failed - return the error
+      wp_send_json_error( array( 'message' => $last_error ) );
+      return;
+    } else {
+      // Other error
+      $error = $last_error ?: 'Failed to start sync job';
+      wp_send_json_error( array( 'message' => $error ) );
+      return;
+    }
   }
   
   // Return jobId to frontend
