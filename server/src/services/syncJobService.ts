@@ -130,6 +130,31 @@ export function cancelJob(jobId: string): SyncJob | null {
 }
 
 /**
+ * Check for stuck jobs (running for more than 30 minutes) and mark them as failed
+ */
+export function checkStuckJobs(): number {
+  const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+  let fixed = 0;
+  
+  for (const [jobId, job] of jobStore.entries()) {
+    if (job.status === 'running' && job.updatedAt.getTime() < thirtyMinutesAgo) {
+      console.warn(`[syncJobService] Marking stuck job ${jobId} as failed (last update: ${job.updatedAt.toISOString()})`);
+      updateJobProgress(jobId, {
+        status: 'failed',
+        error: 'Job appears to be stuck (no progress for 30+ minutes)',
+        stepMessage: 'Sync failed: Job timeout - no progress detected for 30+ minutes',
+      });
+      fixed++;
+    }
+  }
+  
+  return fixed;
+}
+
+// Check for stuck jobs every 5 minutes
+setInterval(checkStuckJobs, 5 * 60 * 1000);
+
+/**
  * Clean up old completed jobs (older than 1 hour)
  */
 export function cleanupOldJobs(): number {

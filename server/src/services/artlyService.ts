@@ -655,66 +655,126 @@ export const processPointsBalances = async (
   
   let updated = 0;
   let errors: string[] = [];
-  const batchSize = 50; // Update progress every 50 records
+  const progressUpdateInterval = 50; // Update progress every 50 records
+  const transactionBatchSize = 20; // Process 20 balances per transaction for better performance
 
-  for (let i = 0; i < balances.length; i++) {
-    const balance = balances[i];
+  // Process balances in batches to improve performance and reduce transaction overhead
+  for (let batchStart = 0; batchStart < balances.length; batchStart += transactionBatchSize) {
+    const batchEnd = Math.min(batchStart + transactionBatchSize, balances.length);
+    const batch = balances.slice(batchStart, batchEnd);
+    
     try {
+      // Process entire batch in a single transaction
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // Upsert customer
-        const customer = await tx.customer.upsert({
-          where: {
-            tenantId_externalUserId: {
-              tenantId,
-              externalUserId: BigInt(balance.wp_user_id),
-            },
-          },
-          update: { email: balance.email },
-          create: {
-            tenantId,
-            externalUserId: BigInt(balance.wp_user_id),
-            email: balance.email,
-          },
-        });
+        for (const balance of batch) {
+          try {
+            // Upsert customer
+            const customer = await tx.customer.upsert({
+              where: {
+                tenantId_externalUserId: {
+                  tenantId,
+                  externalUserId: BigInt(balance.wp_user_id),
+                },
+              },
+              update: { email: balance.email },
+              create: {
+                tenantId,
+                externalUserId: BigInt(balance.wp_user_id),
+                email: balance.email,
+              },
+            });
 
-        // Update wallet snapshot with current balance
-        await tx.walletSnapshot.upsert({
-          where: {
-            tenantId_customerId: {
-              tenantId,
-              customerId: customer.id,
-            },
-          },
-          create: {
-            tenantId,
-            customerId: customer.id,
-            pointsBalance: balance.points_balance,
-          },
-          update: {
-            pointsBalance: balance.points_balance,
-            updatedAt: new Date(),
-          },
-        });
+            // Update wallet snapshot with current balance
+            await tx.walletSnapshot.upsert({
+              where: {
+                tenantId_customerId: {
+                  tenantId,
+                  customerId: customer.id,
+                },
+              },
+              create: {
+                tenantId,
+                customerId: customer.id,
+                pointsBalance: balance.points_balance,
+              },
+              update: {
+                pointsBalance: balance.points_balance,
+                updatedAt: new Date(),
+              },
+            });
+            
+            updated += 1;
+          } catch (error: any) {
+            // Log error but continue with rest of batch
+            const errorMsg = `Error processing balance for wp_user_id ${balance.wp_user_id} (${balance.email}): ${error.message}`;
+            console.error('[processPointsBalances]', errorMsg);
+            errors.push(errorMsg);
+          }
+        }
+      }, {
+        timeout: 30000, // 30 second timeout per batch
       });
-
-      updated += 1;
       
-      // Update job progress every batch or on last item
-      if (jobId && (updated % batchSize === 0 || updated === balances.length)) {
+      // Update job progress periodically
+      if (jobId && (updated % progressUpdateInterval === 0 || updated === balances.length)) {
         updateJobProgress(jobId, {
           processed: updated,
           stepMessage: `Processed ${updated}/${balances.length} balances...`,
         });
       }
       
-      // Log progress every 50 records
-      if (updated % batchSize === 0) {
+      // Log progress periodically
+      if (updated % progressUpdateInterval === 0 || updated === balances.length) {
         console.log(`[processPointsBalances] Processed ${updated}/${balances.length} balances...`);
       }
     } catch (error: any) {
-      const errorMsg = `Error processing balance for wp_user_id ${balance.wp_user_id} (${balance.email}): ${error.message}`;
-      console.error('[processPointsBalances]', errorMsg);
-      errors.push(errorMsg);
+      // If entire batch fails, process items individually to avoid losing all progress
+      console.error(`[processPointsBalances] Batch ${batchStart}-${batchEnd} failed, processing individually:`, error.message);
+      
+      for (const balance of batch) {
+        try {
+          await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            const customer = await tx.customer.upsert({
+              where: {
+                tenantId_externalUserId: {
+                  tenantId,
+                  externalUserId: BigInt(balance.wp_user_id),
+                },
+              },
+              update: { email: balance.email },
+              create: {
+                tenantId,
+                externalUserId: BigInt(balance.wp_user_id),
+                email: balance.email,
+              },
+            });
+
+            await tx.walletSnapshot.upsert({
+              where: {
+                tenantId_customerId: {
+                  tenantId,
+                  customerId: customer.id,
+                },
+              },
+              create: {
+                tenantId,
+                customerId: customer.id,
+                pointsBalance: balance.points_balance,
+              },
+              update: {
+                pointsBalance: balance.points_balance,
+                updatedAt: new Date(),
+              },
+            });
+            
+            updated += 1;
+          }, { timeout: 10000 });
+        } catch (individualError: any) {
+          const errorMsg = `Error processing balance for wp_user_id ${balance.wp_user_id} (${balance.email}): ${individualError.message}`;
+          console.error('[processPointsBalances]', errorMsg);
+          errors.push(errorMsg);
+        }
+      }
     }
   }
 
