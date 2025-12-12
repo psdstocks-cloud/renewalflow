@@ -1,74 +1,97 @@
 import React, { useState } from 'react';
-import { AuthLayout } from '../../components/auth/AuthLayout';
-import { supabase } from '../../lib/supabaseClient';
+import { Link } from 'react-router-dom';
+import { useAuth } from '@/src/context/AuthContext';
+import { AuthLayout } from '@/src/components/layout/AuthLayout';
+import { Button } from '@/src/components/ui/Button';
+import { Input } from '@/src/components/ui/Input';
+import { useLanguage } from '@/src/context/LanguageContext';
 
-export function ForgotPasswordPage() {
+export const ForgotPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const { resetPassword } = useAuth();
+  const { lang } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    if (!email) {
-      setError('Email is required.');
-      return;
-    }
-
+    setError('');
+    setMessage('');
     setIsLoading(true);
+
     try {
-      const redirectTo = `${window.location.origin}/auth/reset-password`;
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-      if (resetError) {
-        throw resetError;
+      const { error } = await resetPassword(email);
+      if (error) {
+        setError(error.message);
+      } else {
+        setMessage(lang === 'en'
+          ? 'Check your email for the password reset link.'
+          : 'راجع إيميلك، بعتنالك رابط تغيير كلمة المرور.'
+        );
       }
-      setSubmitted(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to process request.';
-      setError(message);
+      setError('An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const text = {
+    en: {
+      title: 'Reset Password',
+      subtitle: "Enter your email and we'll send you a link to reset your password.",
+      emailLabel: 'Email Address',
+      submitBtn: 'Send Reset Link',
+      backToSignIn: 'Back to Sign In'
+    },
+    ar: {
+      title: 'نسيت كلمة المرور؟',
+      subtitle: 'اكتب إيميلك وهنبعتلك رابط تغير منه كلمة السر.',
+      emailLabel: 'البريد الإلكتروني',
+      submitBtn: 'إرسال رابط التغيير',
+      backToSignIn: 'رجوع لتسجيل الدخول'
+    }
+  };
+
+  const t = text[lang];
+
   return (
-    <AuthLayout
-      title="Forgot password"
-      subtitle="Enter your email and we’ll send you a link to reset your password."
-      footerText="Remembered your password?"
-      footerLinkText="Back to sign in"
-      footerLinkTo="/auth/sign-in"
-    >
-      {submitted ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 p-4 text-sm">
-          If this email exists in our system, we sent a reset link.
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm text-slate-300" htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-              placeholder="you@example.com"
-              required
-            />
+    <AuthLayout title={t.title} subtitle={t.subtitle}>
+      <form onSubmit={handleSubmit} className="space-y-5">
+
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            <i className="fas fa-exclamation-circle mr-2"></i> {error}
           </div>
-          {error && <div className="text-xs text-red-400">{error}</div>}
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2 transition disabled:opacity-50"
-          >
-            {isLoading ? 'Sending...' : 'Send reset link'}
-          </button>
-        </form>
-      )}
+        )}
+
+        {message && (
+          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
+            <i className="fas fa-check-circle mr-2"></i> {message}
+          </div>
+        )}
+
+        <Input
+          label={t.emailLabel}
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          placeholder="name@company.com"
+        />
+
+        <Button type="submit" variant="primary" fullWidth disabled={isLoading}>
+          {isLoading ? <i className="fas fa-spinner fa-spin"></i> : t.submitBtn}
+        </Button>
+      </form>
+
+      <div className="mt-8 text-center text-sm">
+        <Link to="/auth/sign-in" className="text-zinc-500 hover:text-white transition-colors flex items-center justify-center gap-2">
+          <i className="fas fa-arrow-left"></i>
+          {t.backToSignIn}
+        </Link>
+      </div>
     </AuthLayout>
   );
-}
+};

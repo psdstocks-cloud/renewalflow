@@ -1,95 +1,87 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AuthLayout } from '../../components/auth/AuthLayout';
-import { supabase } from '../../lib/supabaseClient';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/src/context/AuthContext';
+import { AuthLayout } from '@/src/components/layout/AuthLayout';
+import { Button } from '@/src/components/ui/Button';
+import { Input } from '@/src/components/ui/Input';
+import { useLanguage } from '@/src/context/LanguageContext';
 
-export function ResetPasswordPage() {
-  const navigate = useNavigate();
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+export const ResetPasswordPage: React.FC = () => {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const { updatePassword } = useAuth();
+  const navigate = useNavigate();
+  const { lang } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    if (!newPassword || !confirmNewPassword) {
-      setError('All fields are required.');
-      return;
-    }
-
-    if (newPassword !== confirmNewPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
+    setError('');
     setIsLoading(true);
+
     try {
-      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
-      if (updateError) {
-        throw updateError;
+      const { error } = await updatePassword(password);
+      if (error) {
+        setError(error.message);
+      } else {
+        navigate('/auth/sign-in');
       }
-      setSuccess(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to reset password.';
-      setError(message);
+      setError('An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const text = {
+    en: {
+      title: 'Set New Password',
+      subtitle: 'Your new password must be different from previous used passwords.',
+      passwordLabel: 'New Password',
+      submitBtn: 'Reset Password',
+      backToSignIn: 'Back to Sign In'
+    },
+    ar: {
+      title: 'تعيين كلمة مرور جديدة',
+      subtitle: 'اختار كلمة سر قوية ومختلفة عن القديمة.',
+      passwordLabel: 'كلمة المرور الجديدة',
+      submitBtn: 'تغيير كلمة المرور',
+      backToSignIn: 'رجوع لتسجيل الدخول'
+    }
+  };
+
+  const t = text[lang];
+
   return (
-    <AuthLayout title="Reset password" subtitle="Choose a new password to secure your account">
-      {success ? (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 p-4 text-sm">
-            Your password has been updated successfully.
+    <AuthLayout title={t.title} subtitle={t.subtitle}>
+      <form onSubmit={handleSubmit} className="space-y-5">
+
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            <i className="fas fa-exclamation-circle mr-2"></i> {error}
           </div>
-          <button
-            onClick={() => navigate('/auth/sign-in')}
-            className="w-full rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2"
-          >
-            Go to Sign in
-          </button>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm text-slate-300" htmlFor="newPassword">New password</label>
-            <input
-              id="newPassword"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm text-slate-300" htmlFor="confirmNewPassword">Confirm new password</label>
-            <input
-              id="confirmNewPassword"
-              type="password"
-              value={confirmNewPassword}
-              onChange={(e) => setConfirmNewPassword(e.target.value)}
-              className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-          {error && <div className="text-xs text-red-400">{error}</div>}
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2 transition disabled:opacity-50"
-          >
-            {isLoading ? 'Updating...' : 'Reset password'}
-          </button>
-        </form>
-      )}
+        )}
+
+        <Input
+          label={t.passwordLabel}
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          placeholder="••••••••"
+        />
+
+        <Button type="submit" variant="primary" fullWidth disabled={isLoading}>
+          {isLoading ? <i className="fas fa-spinner fa-spin"></i> : t.submitBtn}
+        </Button>
+      </form>
+
+      <div className="mt-8 text-center text-sm">
+        <Link to="/auth/sign-in" className="text-zinc-500 hover:text-white transition-colors flex items-center justify-center gap-2">
+          <i className="fas fa-arrow-left"></i>
+          {t.backToSignIn}
+        </Link>
+      </div>
     </AuthLayout>
   );
-}
+};

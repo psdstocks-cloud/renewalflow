@@ -1,101 +1,101 @@
 import React, { useState } from 'react';
-import { AuthLayout } from '../../components/auth/AuthLayout';
-import { useAuth } from '../../context/AuthContext';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/src/context/AuthContext';
+import { AuthLayout } from '@/src/components/layout/AuthLayout';
+import { Button } from '@/src/components/ui/Button';
+import { Input } from '@/src/components/ui/Input';
+import { useLanguage } from '@/src/context/LanguageContext';
 
-export function SignUpPage() {
-  const { signUp } = useAuth();
+export const SignUpPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const { signUp } = useAuth();
+  const navigate = useNavigate();
+  const { lang } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    if (!email || !password || !confirmPassword) {
-      setError('All fields are required.');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
+    setError('');
     setIsLoading(true);
+
     try {
-      const result = await signUp({ email, password });
-      if (result.confirmationEmailSent || !result.session) {
-        setSuccessMessage(`Check your email (${email}) to confirm your account.`);
+      const { error } = await signUp(email, password);
+      if (error) {
+        setError(error.message);
       } else {
-        setSuccessMessage('Account created. Redirect to dashboard after first login.');
+        navigate('/auth/email-confirm');
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to create account.';
-      setError(message);
+      setError('An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const text = {
+    en: {
+      title: 'Create Account',
+      subtitle: 'Start your journey with RenewalFlow today.',
+      emailLabel: 'Email Address',
+      passwordLabel: 'Password',
+      signUpBtn: 'Create Account',
+      hasAccount: "Already have an account?",
+      signIn: 'Sign in'
+    },
+    ar: {
+      title: 'إنشاء حساب جديد',
+      subtitle: 'ابدأ رحلتك مع RenewalFlow النهاردة.',
+      emailLabel: 'البريد الإلكتروني',
+      passwordLabel: 'كلمة المرور',
+      signUpBtn: 'إنشاء الحساب',
+      hasAccount: 'عندك حساب بالفعل؟',
+      signIn: 'تسجيل دخول'
+    }
+  };
+
+  const t = text[lang];
+
   return (
-    <AuthLayout
-      title="Create your account"
-      subtitle="Start tracking renewals with RenewalFlow"
-      footerText="Already have an account?"
-      footerLinkText="Sign in instead"
-      footerLinkTo="/auth/sign-in"
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-sm text-slate-300" htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-            placeholder="you@example.com"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm text-slate-300" htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-            placeholder="••••••••"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm text-slate-300" htmlFor="confirmPassword">Confirm password</label>
-          <input
-            id="confirmPassword"
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-            placeholder="••••••••"
-            required
-          />
-        </div>
-        {error && <div className="text-xs text-red-400">{error}</div>}
-        {successMessage && <div className="text-xs text-emerald-400">{successMessage}</div>}
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="w-full rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2 transition disabled:opacity-50"
-        >
-          {isLoading ? 'Creating account...' : 'Create account'}
-        </button>
+    <AuthLayout title={t.title} subtitle={t.subtitle}>
+      <form onSubmit={handleSubmit} className="space-y-5">
+
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            <i className="fas fa-exclamation-circle mr-2"></i> {error}
+          </div>
+        )}
+
+        <Input
+          label={t.emailLabel}
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          placeholder="name@company.com"
+        />
+
+        <Input
+          label={t.passwordLabel}
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          placeholder="••••••••"
+        />
+
+        <Button type="submit" variant="primary" fullWidth disabled={isLoading}>
+          {isLoading ? <i className="fas fa-spinner fa-spin"></i> : t.signUpBtn}
+        </Button>
       </form>
+
+      <div className="mt-8 text-center text-sm text-zinc-500">
+        {t.hasAccount} {' '}
+        <Link to="/auth/sign-in" className="text-violet-400 hover:text-white font-bold transition-colors">
+          {t.signIn}
+        </Link>
+      </div>
     </AuthLayout>
   );
-}
+};

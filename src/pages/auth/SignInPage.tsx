@@ -1,88 +1,110 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AuthLayout } from '../../components/auth/AuthLayout';
-import { useAuth } from '../../context/AuthContext';
-import { apiFetch } from '../../services/apiClient';
+import { useAuth } from '@/src/context/AuthContext';
+import { AuthLayout } from '@/src/components/layout/AuthLayout';
+import { Button } from '@/src/components/ui/Button';
+import { Input } from '@/src/components/ui/Input';
+import { useLanguage } from '@/src/context/LanguageContext';
 
-export function SignInPage() {
-  const navigate = useNavigate();
-  const { signIn } = useAuth();
+export const SignInPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
+  const { lang } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    if (!email || !password) {
-      setError('Email and password are required.');
-      return;
-    }
-
+    setError('');
     setIsLoading(true);
+
     try {
-      await signIn({ email, password });
-      // Small delay to ensure token is set in AuthContext
-      await new Promise(resolve => setTimeout(resolve, 50));
-      await apiFetch('/api/workspaces/bootstrap', { method: 'POST' });
-      navigate('/dashboard');
+      const { error } = await signIn(email, password);
+      if (error) {
+        setError(error.message);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to sign in.';
-      setError(message);
+      setError('An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const text = {
+    en: {
+      title: 'Welcome Back',
+      subtitle: 'Sign in to access your dashboard.',
+      emailLabel: 'Email Address',
+      passwordLabel: 'Password',
+      forgotPassword: 'Forgot Password?',
+      signInBtn: 'Sign In',
+      noAccount: "Don't have an account?",
+      signUp: 'Sign up'
+    },
+    ar: {
+      title: 'أهلاً بعودتك',
+      subtitle: 'سجل دخولك عشان تتابع شغلك.',
+      emailLabel: 'البريد الإلكتروني',
+      passwordLabel: 'كلمة المرور',
+      forgotPassword: 'نسيت كلمة السر؟',
+      signInBtn: 'تسجيل الدخول',
+      noAccount: 'لسه معندكش حساب؟',
+      signUp: 'اشترك الآن'
+    }
+  };
+
+  const t = text[lang];
+
   return (
-    <AuthLayout
-      title="Welcome back"
-      subtitle="Sign in to manage renewals"
-      footerText="Don’t have an account?"
-      footerLinkText="Create one"
-      footerLinkTo="/auth/sign-up"
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-sm text-slate-300" htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-            placeholder="you@example.com"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm text-slate-300" htmlFor="password">Password</label>
-          <input
-            id="password"
+    <AuthLayout title={t.title} subtitle={t.subtitle}>
+      <form onSubmit={handleSubmit} className="space-y-5">
+
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            <i className="fas fa-exclamation-circle mr-2"></i> {error}
+          </div>
+        )}
+
+        <Input
+          label={t.emailLabel}
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          placeholder="name@company.com"
+        />
+
+        <div>
+          <Input
+            label={t.passwordLabel}
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-            placeholder="••••••••"
             required
+            placeholder="••••••••"
           />
+          <div className="flex justify-end mt-1">
+            <Link to="/auth/forgot-password" className="text-xs text-violet-400 hover:text-violet-300 font-medium transition-colors">
+              {t.forgotPassword}
+            </Link>
+          </div>
         </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-red-400 text-xs h-4">{error}</span>
-          <Link to="/auth/forgot-password" className="text-indigo-400 hover:text-indigo-300">
-            Forgot password?
-          </Link>
-        </div>
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="w-full rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2 transition disabled:opacity-50"
-        >
-          {isLoading ? 'Signing in...' : 'Sign in'}
-        </button>
+
+        <Button type="submit" variant="primary" fullWidth disabled={isLoading}>
+          {isLoading ? <i className="fas fa-spinner fa-spin"></i> : t.signInBtn}
+        </Button>
       </form>
+
+      <div className="mt-8 text-center text-sm text-zinc-500">
+        {t.noAccount} {' '}
+        <Link to="/auth/sign-up" className="text-violet-400 hover:text-white font-bold transition-colors">
+          {t.signUp}
+        </Link>
+      </div>
     </AuthLayout>
   );
-}
+};
