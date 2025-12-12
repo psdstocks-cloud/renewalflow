@@ -56,17 +56,17 @@ export const ActionCenter: React.FC<ActionCenterProps> = ({
                         <div className="p-5 flex items-center justify-between">
                             <div className="flex items-center gap-4">
                                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 flex items-center justify-center text-white font-bold text-sm">
-                                    {task.subscriberName.charAt(0)}
+                                    {(task.subscriber?.name || '?').charAt(0)}
                                 </div>
                                 <div>
-                                    <h4 className="font-bold text-white text-lg">{task.subscriberName}</h4>
+                                    <h4 className="font-bold text-white text-lg">{task.subscriber?.name || 'Unknown Subscriber'}</h4>
                                     <div className="flex items-center gap-3 text-sm mt-1">
                                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${task.daysUntilExpiry < 0 ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
                                             {Math.abs(task.daysUntilExpiry)} Days {task.daysUntilExpiry < 0 ? 'Overdue' : 'Left'}
                                         </span>
-                                        <span className="text-zinc-500">{task.planName}</span>
+                                        <span className="text-zinc-500">{task.subscriber?.planName || 'No Plan'}</span>
                                         <span className="text-violet-400 font-medium flex items-center gap-1">
-                                            <i className="fas fa-coins text-xs"></i> {task.pointsToRoll} Points
+                                            <i className="fas fa-coins text-xs"></i> {task.subscriber?.pointsRemaining || 0} Points
                                         </span>
                                     </div>
                                 </div>
