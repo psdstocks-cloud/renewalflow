@@ -58,12 +58,14 @@ function artly_reminder_bridge_fetch_orders_batch(int $last_id): array
   // or fallback to raw DB for performance if needed. 
   // Standard approach:
 
+  // We want to sync ALL orders to ensure the counts match (Total Orders vs Synced Orders).
+  // The backend can decide which ones are valid for renewal.
+
   $args = array(
     'limit' => 50, // Small batch to prevent timeouts
     'orderby' => 'id',
     'order' => 'ASC',
-    'status' => array('wc-processing', 'wc-completed'),
-    'type' => 'shop_order',
+    'type' => 'shop_order', // Sync all statuses
   );
 
   // There isn't a native 'min_id' param in wc_get_orders. 
@@ -80,13 +82,11 @@ function artly_reminder_bridge_fetch_orders_batch(int $last_id): array
   // then fetching objects.
   global $wpdb;
 
-  $statuses = array('wc-processing', 'wc-completed');
-  $status_string = "'" . implode("','", $statuses) . "'";
-
+  // FETCH ALL STATUSES
   $sql = "
         SELECT ID FROM {$wpdb->posts}
         WHERE post_type = 'shop_order'
-        AND post_status IN ($status_string)
+        /* AND post_status IN ... (Removed to sync all) */
         AND ID > %d
         ORDER BY ID ASC
         LIMIT 50
@@ -469,7 +469,8 @@ function artly_reminder_bridge_render_admin_page(): void
         <div class="rf-stat-value"><?php echo esc_html($last_sync ? date('H:i', strtotime($last_sync)) : '--:--'); ?>
         </div>
         <div style="font-size:0.8rem; color:#52525b; margin-top:5px;">
-          <?php echo esc_html($last_sync ? date('M d, Y', strtotime($last_sync)) : 'Never'); ?></div>
+          <?php echo esc_html($last_sync ? date('M d, Y', strtotime($last_sync)) : 'Never'); ?>
+        </div>
       </div>
     </div>
 
