@@ -27,3 +27,4 @@ server/.env.*
 *.njsproj
 *.sln
 *.sw?
+wp-content/plugins/artly-reminder-bridge.zip
