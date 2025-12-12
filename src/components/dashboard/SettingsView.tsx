@@ -1,8 +1,13 @@
-import React from 'react';
-import { Card } from '@/src/components/ui/Card';
+import React, { useState } from 'react';
+import { ReminderConfig, EmailTemplateConfig, AdminWhatsAppConfig, WooSettings } from '@/src/types';
+import { SettingsLayout, SettingsTab } from '@/src/components/settings/SettingsLayout';
+
+// Sub-tabs
+import { ProfileTab } from '../settings/tabs/ProfileTab';
+import { WorkspaceTab } from '../settings/tabs/WorkspaceTab';
+import { AutomationTab } from '../settings/tabs/AutomationTab';
+import { IntegrationsTab } from '../settings/tabs/IntegrationsTab';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
-import { ReminderConfig, EmailTemplateConfig, AdminWhatsAppConfig } from '@/src/types';
 
 interface SettingsViewProps {
     reminderConfig: ReminderConfig;
@@ -11,6 +16,8 @@ interface SettingsViewProps {
     setEmailTemplate: (c: EmailTemplateConfig) => void;
     adminWhatsApp: AdminWhatsAppConfig;
     setAdminWhatsApp: (c: AdminWhatsAppConfig) => void;
+    wooSettings?: WooSettings;
+    setWooSettings?: (c: WooSettings) => void; // Optional for backward compatibility if not passed yet
     onSave: () => void;
     isSaving: boolean;
 }
@@ -22,91 +29,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEmailTemplate,
     adminWhatsApp,
     setAdminWhatsApp,
+    wooSettings = { url: '', consumerKey: '', consumerSecret: '', pointsPerCurrency: 1 },
+    setWooSettings = () => { },
     onSave,
     isSaving
 }) => {
+
+    // Internal tab state for the settings view
+    const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
+
     return (
-        <div className="space-y-6 max-w-4xl">
-            <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-white">System Settings</h2>
-                <Button onClick={onSave} disabled={isSaving}>
-                    {isSaving ? 'Saving...' : 'Save Changes'}
+        <SettingsLayout activeTab={activeTab} onTabChange={setActiveTab}>
+            {/* Global Save Button (floating or top right) */}
+            <div className="flex justify-end mb-6">
+                <Button onClick={onSave} disabled={isSaving} variant="primary">
+                    {isSaving ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-save mr-2"></i>}
+                    Save All Changes
                 </Button>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-6">
-                <Card>
-                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                        <i className="fas fa-clock text-violet-400"></i> Reminder Timing
-                    </h3>
-                    <div className="space-y-4">
-                        <Input
-                            label="First Reminder (Days Before)"
-                            type="number"
-                            value={reminderConfig.firstReminderDays}
-                            onChange={(e) => setReminderConfig({ ...reminderConfig, firstReminderDays: Number(e.target.value) })}
-                        />
-                        <Input
-                            label="Final Reminder (Days Before)"
-                            type="number"
-                            value={reminderConfig.finalReminderDays}
-                            onChange={(e) => setReminderConfig({ ...reminderConfig, finalReminderDays: Number(e.target.value) })}
-                        />
-                    </div>
-                </Card>
+            {activeTab === 'profile' && <ProfileTab />}
 
-                <Card>
-                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                        <i className="fab fa-whatsapp text-emerald-400"></i> Admin Notifications
-                    </h3>
-                    <div className="space-y-4">
-                        <Input
-                            label="Admin Phone Number (WhatsApp)"
-                            placeholder="+1234567890"
-                            value={adminWhatsApp.phoneNumber}
-                            onChange={(e) => setAdminWhatsApp({ ...adminWhatsApp, phoneNumber: e.target.value })}
-                        />
-                        <p className="text-xs text-zinc-500">
-                            You will receive a daily summary of expiring subscriptions at 9:00 AM.
-                        </p>
-                    </div>
-                </Card>
-            </div>
+            {activeTab === 'workspace' && <WorkspaceTab />}
 
-            <Card>
-                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                    <i className="fas fa-envelope text-cyan-400"></i> Email Templates
-                </h3>
-                <div className="space-y-4">
-                    <Input
-                        label="Subject Line Template"
-                        value={emailTemplate.subjectTemplate}
-                        onChange={(e) => setEmailTemplate({ ...emailTemplate, subjectTemplate: e.target.value })}
-                    />
+            {activeTab === 'automation' && (
+                <AutomationTab
+                    reminderConfig={reminderConfig}
+                    setReminderConfig={setReminderConfig}
+                    emailTemplate={emailTemplate}
+                    setEmailTemplate={setEmailTemplate}
+                />
+            )}
 
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-400 mb-1.5 ml-1">AI Context & Tone</label>
-                        <textarea
-                            className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 text-white resize-y focus:outline-none focus:border-violet-500 h-32"
-                            value={emailTemplate.context}
-                            onChange={(e) => setEmailTemplate({ ...emailTemplate, context: e.target.value })}
-                            placeholder="e.g. Be polite but urgent. Emphasize point loss."
-                        ></textarea>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-zinc-400 mb-1.5 ml-1">Fallback Body Template</label>
-                        <textarea
-                            className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 text-white resize-y focus:outline-none focus:border-violet-500 h-32"
-                            value={emailTemplate.bodyTemplate}
-                            onChange={(e) => setEmailTemplate({ ...emailTemplate, bodyTemplate: e.target.value })}
-                        ></textarea>
-                        <p className="text-xs text-zinc-500 mt-2">
-                            Variables: <code className="bg-white/10 px-1 rounded">{'{name}'}</code>, <code className="bg-white/10 px-1 rounded">{'{daysLeft}'}</code>, <code className="bg-white/10 px-1 rounded">{'{points}'}</code>
-                        </p>
-                    </div>
-                </div>
-            </Card>
-        </div>
+            {activeTab === 'integrations' && (
+                <IntegrationsTab
+                    adminWhatsApp={adminWhatsApp}
+                    setAdminWhatsApp={setAdminWhatsApp}
+                    wooSettings={wooSettings}
+                    setWooSettings={setWooSettings}
+                />
+            )}
+        </SettingsLayout>
     );
 };
