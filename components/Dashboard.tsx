@@ -190,26 +190,26 @@ const Dashboard: React.FC = () => {
       {(activeTab === 'overview' || activeTab === 'action') && stats && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 animate-fade-in-up">
           <StatCard
-            label={t('total_revenue')}
-            value={`$${stats.totalRevenue.toLocaleString()}`}
-            trend="+12% vs last month" trendUp={true}
-            icon="fa-dollar-sign" color="violet"
+            label={t('active_subscribers')}
+            value={stats.totalActive.toString()}
+            icon="fa-users" color="violet"
           />
           <StatCard
-            label={t('active_subscribers')}
-            value={stats.activeCount.toString()}
-            icon="fa-users" color="cyan"
+            label="Points Liability"
+            value={stats.totalPointsRemaining.toLocaleString()}
+            trend="Unredeemed points" trendUp={false}
+            icon="fa-coins" color="cyan"
           />
           <StatCard
             label={t('churn_risk')}
-            value={stats.expiredCount.toString()}
-            trend={`${stats.expiredCount} expired`} trendUp={false}
+            value={stats.totalExpired.toString()}
+            trend={`${stats.expiringSoonCount} expiring soon`} trendUp={false}
             icon="fa-user-times" color="rose"
           />
           <StatCard
             label={t('revenue_recovered')}
-            value="$12,450"
-            trend="This year" trendUp={true}
+            value="$0"
+            trend="Not available" trendUp={true}
             icon="fa-check-circle" color="emerald"
           />
         </div>
