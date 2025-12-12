@@ -58,15 +58,17 @@ function artly_reminder_bridge_fetch_orders_batch(int $last_id): array
   // or fallback to raw DB for performance if needed. 
   // Standard approach:
 
-  // We want to sync ALL orders to ensure the counts match (Total Orders vs Synced Orders).
-  // The backend can decide which ones are valid for renewal.
-
-  $args = array(
-    'limit' => 50, // Small batch to prevent timeouts
-    'orderby' => 'id',
-    'order' => 'ASC',
-    'type' => 'shop_order', // Sync all statuses
-  );
+    // We strictly sync 'processing' orders as requested.
+    // This status indicates a successful payment for our specific workflow.
+    // Excludes: completed, cancelled, failed.
+    
+    $args = array(
+        'limit'   => 50, // Small batch
+        'orderby' => 'id',
+        'order'   => 'ASC',
+        'status'  => array( 'wc-processing' ),
+        'type'    => 'shop_order',
+    );
 
   // There isn't a native 'min_id' param in wc_get_orders. 
   // We can use the 'date_created' as a cursor if ID is tricky, but ID is requested.
@@ -82,11 +84,11 @@ function artly_reminder_bridge_fetch_orders_batch(int $last_id): array
   // then fetching objects.
   global $wpdb;
 
-  // FETCH ALL STATUSES
+  // FILTER: ONLY PROCESSING
   $sql = "
         SELECT ID FROM {$wpdb->posts}
         WHERE post_type = 'shop_order'
-        /* AND post_status IN ... (Removed to sync all) */
+        AND post_status = 'wc-processing'
         AND ID > %d
         ORDER BY ID ASC
         LIMIT 50
