@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { cronAuthMiddleware } from '../middleware/auth';
-import { syncWooOrders } from '../services/wooService';
+import { syncAllWooCustomers } from '../services/wooService';
 import { computeReminderTasks, sendReminderBatch } from '../services/reminderService';
 
 export const cronRouter = Router();
@@ -10,7 +10,7 @@ cronRouter.post('/api/cron/daily', cronAuthMiddleware, async (_req, res, next) =
     const date = new Date();
     let wooResult = null;
     try {
-      wooResult = await syncWooOrders();
+      wooResult = await syncAllWooCustomers();
     } catch (error) {
       console.warn('Woo sync failed during cron', error);
     }

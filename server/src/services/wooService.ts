@@ -89,3 +89,26 @@ export async function syncWooCustomersPage(page: number = 1) {
 
   return { created, updated, totalUsers, totalPages, currentPage: page };
 }
+
+export async function syncAllWooCustomers() {
+  let page = 1;
+  let totalCreated = 0;
+  let totalUpdated = 0;
+  let totalProcessed = 0;
+
+  while (true) {
+    const res = await syncWooCustomersPage(page);
+    totalCreated += res.created;
+    totalUpdated += res.updated;
+    totalProcessed += 50; // approximate, or we can use users length if we exposed it
+
+    if (page >= res.totalPages || res.totalPages === 0) {
+      break;
+    }
+    page++;
+    // Add small delay to be nice to the server in a tight loop
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  return { created: totalCreated, updated: totalUpdated, totalOrdersProcessed: totalProcessed };
+}
