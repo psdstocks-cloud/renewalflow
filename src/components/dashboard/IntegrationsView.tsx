@@ -50,7 +50,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                             <h3 className="text-xl font-bold text-white flex items-center gap-2">
                                 <i className="fab fa-wordpress text-blue-400"></i> WooCommerce API
                             </h3>
-                            <span className="px-2 py-1 rounded bg-blue-500/10 text-blue-400 text-xs font-bold uppercase">Legacy</span>
+                            {/* Removed Legacy badge to avoid confusion */}
                         </div>
 
                         <div className="space-y-4">
