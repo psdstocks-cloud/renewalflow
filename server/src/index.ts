@@ -11,6 +11,7 @@ import { workspaceRouter } from './routes/workspaces';
 import { errorHandler } from './middleware/errorHandler';
 import { artlyRouter } from './routes/artly';
 import { websiteConnectionRouter } from './routes/websiteConnections';
+import webhookRouter from './routes/webhookRoutes';
 import { startCronJobs } from './services/cronScheduler';
 import { checkDatabaseConnection } from './config/db';
 
@@ -34,12 +35,12 @@ const corsOptions = {
     if (!origin) {
       return callback(null, true);
     }
-    
+
     // Check if origin is in allowed list
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    
+
     // Log blocked origins for debugging
     console.log('[CORS] Blocked origin:', origin);
     callback(new Error('Not allowed by CORS'));
@@ -66,8 +67,8 @@ app.use(express.json({ limit: '1mb' }));
 // Log all incoming requests (for debugging)
 app.use((req, res, next) => {
   console.log(`[Request] ${req.method} ${req.path}`);
-  const artlySecret = Array.isArray(req.headers['x-artly-secret']) 
-    ? req.headers['x-artly-secret'][0] 
+  const artlySecret = Array.isArray(req.headers['x-artly-secret'])
+    ? req.headers['x-artly-secret'][0]
     : req.headers['x-artly-secret'];
   console.log(`[Request] Headers:`, {
     'x-artly-secret': artlySecret ? artlySecret.substring(0, 30) + '...' : 'missing',
@@ -82,6 +83,7 @@ app.use(healthRouter);
 app.use(artlyRouter); // Move artlyRouter earlier to ensure it's checked first
 app.use(workspaceRouter);
 app.use(websiteConnectionRouter);
+app.use('/api/webhooks', webhookRouter);
 app.use(subscriberRouter);
 app.use(settingsRouter);
 app.use(reminderRouter);
@@ -105,7 +107,7 @@ const host = process.env.HOST || '0.0.0.0';
 
 app.listen(port, host, async () => {
   console.log(`RenewalFlow API listening on ${host}:${port}`);
-  
+
   // Check database connection on startup
   const dbConnected = await checkDatabaseConnection();
   if (!dbConnected) {

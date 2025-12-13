@@ -133,3 +133,51 @@ export async function syncAllWooCustomers(workspaceId?: string) {
 
   return { created: totalCreated, updated: totalUpdated, totalOrdersProcessed: totalProcessed };
 }
+
+export interface PointLogEntry {
+  id: number;
+  user_id: number;
+  date: string;
+  points: string | number;
+  event: string;
+  order_id: string | number | null;
+  admin_user_id: string | number | null;
+  data: any;
+}
+
+export async function fetchUserPointsHistory(email: string, workspaceId?: string): Promise<PointLogEntry[]> {
+  // Resolve workspace ID
+  let wsId = workspaceId;
+  if (!wsId) {
+    const defaultWs = await prisma.workspace.findFirst();
+    if (!defaultWs) throw new Error('No workspace found');
+    wsId = defaultWs.id;
+  }
+
+  const { wooSettings } = await getUnmaskedSettings(wsId);
+  if (!wooSettings) {
+    throw new Error('WooCommerce settings are missing');
+  }
+
+  // Use the custom endpoint we added to the plugin
+  const baseUrl = `${wooSettings.url.replace(/\/$/, '')}/wp-json/artly/v1/user-history`;
+  const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
+  const headers = { Authorization: `Basic ${auth}` };
+
+  const url = `${baseUrl}?email=${encodeURIComponent(email)}&secret=renewalflow_secure_sync_2024`;
+
+  try {
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      console.warn(`[Woo] History fetch failed: ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error(`[Woo] History fetch error:`, err);
+    return [];
+  }
+}

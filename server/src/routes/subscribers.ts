@@ -111,7 +111,7 @@ subscriberRouter.get('/api/subscribers/sync-progress', async (req, res, next) =>
     }
 
     const progress = getSyncProgress(workspaceUser.workspaceId);
-    
+
     if (!progress) {
       return res.json({
         status: 'idle',
@@ -205,7 +205,31 @@ subscriberRouter.put('/api/subscribers/:id', async (req, res, next) => {
   }
 });
 
+import { fetchUserPointsHistory } from '../services/wooService';
+
+// ... existing imports
+
+subscriberRouter.get('/api/subscribers/:id/history', async (req, res, next) => {
+  try {
+    const subscriber = await getSubscriber(req.params.id);
+    if (!subscriber) {
+      return res.status(404).json({ message: 'Subscriber not found' });
+    }
+
+    // We assume subscriber has an email
+    if (!subscriber.email) {
+      return res.json([]);
+    }
+
+    const history = await fetchUserPointsHistory(subscriber.email, subscriber.workspaceId);
+    res.json(history);
+  } catch (error) {
+    next(error);
+  }
+});
+
 subscriberRouter.delete('/api/subscribers/:id', async (req, res, next) => {
+
   try {
     const subscriber = await cancelSubscriber(req.params.id);
     res.json(subscriber);

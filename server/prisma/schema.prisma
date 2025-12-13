@@ -173,6 +173,20 @@ model Subscriber {
   emailLogs       EmailLog[]
 
   workspace       Workspace  @relation(fields: [workspaceId], references: [id])
+  pointHistory    PointHistory[]
+}
+
+model PointHistory {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  change       Int
+  reason       String
+  date         DateTime   @default(now())
+  externalId   String?    @unique // To prevent duplicate syncs
+  createdAt    DateTime   @default(now())
+
+  @@index([subscriberId])
 }
 
 model EmailLog {
