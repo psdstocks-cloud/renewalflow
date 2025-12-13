@@ -269,32 +269,32 @@ const Dashboard: React.FC = () => {
             isBatchSending={false}
           />
         )}
-        activeTab === 'subscribers' && (
-        <>
-          <SubscribersView
-            subscribers={subscribers}
-            isLoading={false}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            page={subPage}
-            total={subTotal}
-            onPageChange={setSubPage}
-            onAddSubscriber={() => { }} // TODO: Add create modal
-            onEdit={setEditingSubscriber}
-            onDelete={handleDeleteSubscriber}
-          />
-          <EditSubscriberModal
-            isOpen={!!editingSubscriber}
-            onClose={() => setEditingSubscriber(null)}
-            subscriber={editingSubscriber}
-            onSuccess={() => {
-              loadSubscribers(subPage, searchQuery);
-              loadInitialData(); // Refresh stats
-            }}
-          />
-        </>
+        {activeTab === 'subscribers' && (
+          <>
+            <SubscribersView
+              subscribers={subscribers}
+              isLoading={false}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              page={subPage}
+              total={subTotal}
+              onPageChange={setSubPage}
+              onAddSubscriber={() => { }} // TODO: Add create modal
+              onEdit={setEditingSubscriber}
+              onDelete={handleDeleteSubscriber}
+            />
+            <EditSubscriberModal
+              isOpen={!!editingSubscriber}
+              onClose={() => setEditingSubscriber(null)}
+              subscriber={editingSubscriber}
+              onSuccess={() => {
+                loadSubscribers(subPage, searchQuery);
+                loadInitialData(); // Refresh stats
+              }}
+            />
+          </>
         )
-}
+        }
 
         {
           activeTab === 'integrations' && (
