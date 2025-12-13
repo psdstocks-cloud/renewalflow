@@ -59,6 +59,7 @@ export const SubscribersView: React.FC<SubscribersViewProps> = ({
                             <tr className="bg-white/5 border-b border-white/5 text-zinc-400 text-sm uppercase tracking-wider">
                                 <th className="p-4 pl-6 font-medium">Customer</th>
                                 <th className="p-4 font-medium">Plan</th>
+                                <th className="p-4 font-medium">Points</th>
                                 <th className="p-4 font-medium">Status</th>
                                 <th className="p-4 font-medium">Renewal Date</th>
                                 <th className="p-4 font-medium text-right">Actions</th>
@@ -67,13 +68,13 @@ export const SubscribersView: React.FC<SubscribersViewProps> = ({
                         <tbody className="divide-y divide-white/5">
                             {isLoading ? (
                                 <tr>
-                                    <td colSpan={5} className="p-8 text-center text-zinc-500">
+                                    <td colSpan={6} className="p-8 text-center text-zinc-500">
                                         <i className="fas fa-circle-notch fa-spin mr-2"></i> Loading...
                                     </td>
                                 </tr>
                             ) : subscribers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="p-8 text-center text-zinc-500">
+                                    <td colSpan={6} className="p-8 text-center text-zinc-500">
                                         No subscribers found.
                                     </td>
                                 </tr>
@@ -87,6 +88,9 @@ export const SubscribersView: React.FC<SubscribersViewProps> = ({
                                         <td className="p-4 text-zinc-300">
                                             {sub.planName}
                                             <div className="text-xs text-zinc-500">{sub.amount} {sub.currency}</div>
+                                        </td>
+                                        <td className="p-4 text-zinc-300 font-mono">
+                                            <span className="text-cyan-400 font-bold">{sub.pointsRemaining}</span> pts
                                         </td>
                                         <td className="p-4">
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border
