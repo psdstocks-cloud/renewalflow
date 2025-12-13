@@ -1,6 +1,7 @@
 import { prisma } from '../config/db';
 import { EmailTemplateConfig, ReminderConfig, SettingsResponse, WhatsAppConfig, WooSettings } from '../types/index';
 import { z } from 'zod';
+import { encrypt, decrypt } from '../utils/crypto';
 
 const REMINDER_KEY = 'reminderConfig';
 const EMAIL_TEMPLATE_KEY = 'emailTemplate';
@@ -23,7 +24,14 @@ const whatsappSchema = z.object({
 });
 
 const wooSchema = z.object({
-  url: z.string().url(),
+  url: z.string().transform(val => {
+    if (!val) return '';
+    let url = val.trim();
+    if (!url.startsWith('http')) {
+      url = 'https://' + url;
+    }
+    return url;
+  }).pipe(z.string().url()),
   consumerKey: z.string(),
   consumerSecret: z.string(),
   pointsPerCurrency: z.number().positive()
@@ -50,8 +58,8 @@ async function upsertSetting<T>(key: string, value: T, workspaceId?: string) {
 
 async function getSetting<T>(key: string, workspaceId?: string) {
   const wsId = workspaceId || await getDefaultWorkspaceId();
-  const entry = await prisma.appSettings.findUnique({ 
-    where: { workspaceId_key: { workspaceId: wsId, key } } 
+  const entry = await prisma.appSettings.findUnique({
+    where: { workspaceId_key: { workspaceId: wsId, key } }
   });
   return (entry?.value as T | undefined) ?? null;
 }
@@ -64,11 +72,30 @@ export async function getSettings(): Promise<SettingsResponse> {
     getSetting<WooSettings>(WOO_KEY)
   ]);
 
+  let processedWooSettings = null;
+  if (wooSettings) {
+    try {
+      // Decrypt if necessary (stored encrypted)
+      const keyParams = decrypt(wooSettings.consumerKey);
+      const secretParams = decrypt(wooSettings.consumerSecret);
+
+      processedWooSettings = {
+        ...wooSettings,
+        // Mask the keys directly here
+        consumerKey: keyParams ? `****************${keyParams.slice(-4)}` : '',
+        consumerSecret: secretParams ? `****************${secretParams.slice(-4)}` : '',
+      };
+    } catch (e) {
+      console.error("Error decrypting settings", e);
+      processedWooSettings = wooSettings;
+    }
+  }
+
   return {
     reminderConfig: reminderSchema.parse(reminderConfig ?? {}),
     emailTemplate: emailTemplateSchema.parse(emailTemplate ?? {}),
     adminWhatsApp: whatsappSchema.parse(adminWhatsApp ?? { phoneNumber: '' }),
-    wooSettings: wooSettings ? wooSchema.parse(wooSettings) : null
+    wooSettings: processedWooSettings ? wooSchema.parse(processedWooSettings) : null
   };
 }
 
@@ -83,7 +110,34 @@ export async function updateSettings(payload: Partial<SettingsResponse>) {
     await upsertSetting(WHATSAPP_KEY, whatsappSchema.parse(payload.adminWhatsApp));
   }
   if (payload.wooSettings) {
-    await upsertSetting(WOO_KEY, wooSchema.parse(payload.wooSettings));
+    // Handling encryption logic
+    const currentSettings = await getSetting<WooSettings>(WOO_KEY);
+    const newSettings = wooSchema.parse(payload.wooSettings);
+
+    // Check if key is masked
+    const isKeyMasked = newSettings.consumerKey.startsWith('****');
+    const isSecretMasked = newSettings.consumerSecret.startsWith('****');
+
+    const finalSettings = { ...newSettings };
+
+    if (isKeyMasked && currentSettings) {
+      // Prepare to keep the existing one (but it's encrypted in DB)
+      // Actually, we should just not change it if it matches the mask pattern?
+      // But invalid update might overwrite.
+      // We assume currentSettings.consumerKey IS encrypted.
+      finalSettings.consumerKey = currentSettings.consumerKey;
+    } else {
+      // New value, encrypt it
+      finalSettings.consumerKey = encrypt(newSettings.consumerKey);
+    }
+
+    if (isSecretMasked && currentSettings) {
+      finalSettings.consumerSecret = currentSettings.consumerSecret;
+    } else {
+      finalSettings.consumerSecret = encrypt(newSettings.consumerSecret);
+    }
+
+    await upsertSetting(WOO_KEY, finalSettings);
   }
   return getSettings();
 }
