@@ -21,7 +21,7 @@ export const SignUpPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const { error } = await signUp(email, password);
+      const { error } = await signUp({ email, password });
       if (error) {
         setError(error.message);
       } else {
