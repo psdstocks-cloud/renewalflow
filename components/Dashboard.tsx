@@ -181,15 +181,35 @@ const Dashboard: React.FC = () => {
 
   const handleSyncWoo = async () => {
     setIsSyncingWoo(true);
-    setSyncLog('Syncing orders... (This may take a moment)');
+    setSyncLog('Starting sync...');
     try {
-      const res = await apiFetch<{ created: number; updated: number; totalOrdersProcessed: number }>('/api/woo/sync', { method: 'POST' });
-      const { created, updated, totalOrdersProcessed } = res;
-      setSyncLog(`Success! Processed ${totalOrdersProcessed} orders. (New: ${created}, Updated: ${updated})`);
-      // Refresh stats after sync
-      loadInitialData();
+      // Step 1: Fetch Page 1 to get total pages
+      let totalCreated = 0;
+      let totalUpdated = 0;
+
+      setSyncLog(`Syncing page 1...`);
+      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
+
+      totalCreated += firstRes.created;
+      totalUpdated += firstRes.updated;
+      const totalPages = firstRes.totalPages;
+      const totalUsers = firstRes.totalUsers;
+
+      if (totalPages > 1) {
+        for (let p = 2; p <= totalPages; p++) {
+          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
+          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
+          totalCreated += res.created;
+          totalUpdated += res.updated;
+        }
+      }
+
+      setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
+      loadSubscribers(subPage, searchQuery); // Refresh the table
+      loadInitialData(); // Refresh stats as well
     } catch (err: any) {
-      setSyncLog(`Error: ${err.message || 'Sync failed'}`);
+      console.error(err);
+      setSyncLog(`Error: ${err.message}`);
     } finally {
       setIsSyncingWoo(false);
     }
