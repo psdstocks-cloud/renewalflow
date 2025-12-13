@@ -64,12 +64,12 @@ async function getSetting<T>(key: string, workspaceId?: string) {
   return (entry?.value as T | undefined) ?? null;
 }
 
-export async function getSettings(): Promise<SettingsResponse> {
+export async function getSettings(workspaceId?: string): Promise<SettingsResponse> {
   const [reminderConfig, emailTemplate, adminWhatsApp, wooSettings] = await Promise.all([
-    getSetting<ReminderConfig>(REMINDER_KEY),
-    getSetting<EmailTemplateConfig>(EMAIL_TEMPLATE_KEY),
-    getSetting<WhatsAppConfig>(WHATSAPP_KEY),
-    getSetting<WooSettings>(WOO_KEY)
+    getSetting<ReminderConfig>(REMINDER_KEY, workspaceId),
+    getSetting<EmailTemplateConfig>(EMAIL_TEMPLATE_KEY, workspaceId),
+    getSetting<WhatsAppConfig>(WHATSAPP_KEY, workspaceId),
+    getSetting<WooSettings>(WOO_KEY, workspaceId)
   ]);
 
   let processedWooSettings = null;
@@ -99,19 +99,19 @@ export async function getSettings(): Promise<SettingsResponse> {
   };
 }
 
-export async function updateSettings(payload: Partial<SettingsResponse>) {
+export async function updateSettings(payload: Partial<SettingsResponse>, workspaceId?: string) {
   if (payload.reminderConfig) {
-    await upsertSetting(REMINDER_KEY, reminderSchema.parse(payload.reminderConfig));
+    await upsertSetting(REMINDER_KEY, reminderSchema.parse(payload.reminderConfig), workspaceId);
   }
   if (payload.emailTemplate) {
-    await upsertSetting(EMAIL_TEMPLATE_KEY, emailTemplateSchema.parse(payload.emailTemplate));
+    await upsertSetting(EMAIL_TEMPLATE_KEY, emailTemplateSchema.parse(payload.emailTemplate), workspaceId);
   }
   if (payload.adminWhatsApp) {
-    await upsertSetting(WHATSAPP_KEY, whatsappSchema.parse(payload.adminWhatsApp));
+    await upsertSetting(WHATSAPP_KEY, whatsappSchema.parse(payload.adminWhatsApp), workspaceId);
   }
   if (payload.wooSettings) {
     // Handling encryption logic
-    const currentSettings = await getSetting<WooSettings>(WOO_KEY);
+    const currentSettings = await getSetting<WooSettings>(WOO_KEY, workspaceId);
     const newSettings = wooSchema.parse(payload.wooSettings);
 
     // Check if key is masked
@@ -137,9 +137,9 @@ export async function updateSettings(payload: Partial<SettingsResponse>) {
       finalSettings.consumerSecret = encrypt(newSettings.consumerSecret);
     }
 
-    await upsertSetting(WOO_KEY, finalSettings);
+    await upsertSetting(WOO_KEY, finalSettings, workspaceId);
   }
-  return getSettings();
+  return getSettings(workspaceId);
 }
 
 /**
