@@ -60,6 +60,12 @@ const Dashboard: React.FC = () => {
   const [syncLog, setSyncLog] = useState('');
   const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
 
+  // Subscribers Listing State
+  const [subPage, setSubPage] = useState(1);
+  const [subTotal, setSubTotal] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingSubscriber, setEditingSubscriber] = useState<Subscriber | null>(null);
+
   // --- Effects ---
   useEffect(() => {
     loadInitialData();
