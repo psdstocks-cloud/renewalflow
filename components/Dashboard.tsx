@@ -181,10 +181,11 @@ const Dashboard: React.FC = () => {
 
   const handleSyncWoo = async () => {
     setIsSyncingWoo(true);
-    setSyncLog('Starting sync...');
+    setSyncLog('Syncing orders... (This may take a moment)');
     try {
-      const res = await apiFetch<{ message: string; details?: any }>('/api/woo/sync', { method: 'POST' });
-      setSyncLog(`Success: ${res.message}`);
+      const res = await apiFetch<{ created: number; updated: number; totalOrdersProcessed: number }>('/api/woo/sync', { method: 'POST' });
+      const { created, updated, totalOrdersProcessed } = res;
+      setSyncLog(`Success! Processed ${totalOrdersProcessed} orders. (New: ${created}, Updated: ${updated})`);
       // Refresh stats after sync
       loadInitialData();
     } catch (err: any) {

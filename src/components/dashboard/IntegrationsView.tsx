@@ -72,17 +72,25 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                 value={wooSettings.consumerSecret}
                                 onChange={(e) => setWooSettings({ ...wooSettings, consumerSecret: e.target.value })}
                             />
-                            <div className="pt-4 flex gap-3">
-                                <Button onClick={onSave} disabled={isSaving}>
-                                    {isSaving ? 'Saving...' : 'Save Credentials'}
-                                </Button>
-                                <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo}>
-                                    {isSyncingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-sync mr-2"></i>}
-                                    Test Sync
-                                </Button>
+                            <div className="pt-4 flex flex-col gap-3">
+                                <div className="flex gap-3">
+                                    <Button onClick={onSave} disabled={isSaving}>
+                                        {isSaving ? 'Saving...' : 'Save Credentials'}
+                                    </Button>
+                                    <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo}>
+                                        {isSyncingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-sync mr-2"></i>}
+                                        Test Sync
+                                    </Button>
+                                </div>
+
+                                {isSyncingWoo && (
+                                    <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
+                                        <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
+                                    </div>
+                                )}
                             </div>
                             {syncLog && (
-                                <div className="mt-4 p-3 bg-black/40 rounded-lg text-xs font-mono text-zinc-400 border border-white/5">
+                                <div className={`mt-2 p-3 rounded-lg text-xs font-mono border ${syncLog.startsWith('Error') ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-black/40 text-green-400 border-white/5'}`}>
                                     {syncLog}
                                 </div>
                             )}
