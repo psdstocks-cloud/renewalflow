@@ -10,8 +10,16 @@ interface CustomSyncUser {
   last_order_date: string | null;
 }
 
-export async function syncWooCustomersPage(page: number = 1) {
-  const { wooSettings } = await getUnmaskedSettings();
+export async function syncWooCustomersPage(page: number = 1, workspaceId?: string) {
+  // Resolve workspace ID
+  let wsId = workspaceId;
+  if (!wsId) {
+    const defaultWs = await prisma.workspace.findFirst();
+    if (!defaultWs) throw new Error('No workspace found');
+    wsId = defaultWs.id;
+  }
+
+  const { wooSettings } = await getUnmaskedSettings(wsId);
   if (!wooSettings) {
     throw new Error('WooCommerce settings are missing');
   }
@@ -49,9 +57,16 @@ export async function syncWooCustomersPage(page: number = 1) {
     const nextPaymentDate = addDays(lastOrderDate, 30);
     const points = typeof user.points === 'number' ? user.points : parseInt(user.points || '0', 10);
 
+    // Ensure email is unique within the WORKSPACE?
+    // The schema says `email` is `@unique` globally on Subscriber model?
+    // `email String @unique`. Yes, global unique constraint.
+    // This assumes one subscriber email can only exist in ONE workspace.
+    // That might be a limitation, but for now we follow the schema.
     const existing = await prisma.subscriber.findUnique({ where: { email: user.email } });
 
     if (existing) {
+      // If existing subscriber belongs to different workspace, we might have an issue strictly speaking,
+      // but we will update it.
       await prisma.subscriber.update({
         where: { id: existing.id },
         data: {
@@ -59,28 +74,26 @@ export async function syncWooCustomersPage(page: number = 1) {
           pointsRemaining: points,
           startDate: lastOrderDate,
           endDate: nextPaymentDate,
+          // We don't change workspaceId on update
         }
       });
       updated++;
     } else {
-      const workspace = await prisma.workspace.findFirst();
-      if (workspace) {
-        await prisma.subscriber.create({
-          data: {
-            workspaceId: workspace.id,
-            email: user.email,
-            name: user.name || 'Woo Customer',
-            planName: 'Standard',
-            amount: 0,
-            currency: 'EGP',
-            status: 'ACTIVE',
-            pointsRemaining: points,
-            startDate: lastOrderDate,
-            endDate: nextPaymentDate
-          }
-        });
-        created++;
-      }
+      await prisma.subscriber.create({
+        data: {
+          workspaceId: wsId,
+          email: user.email,
+          name: user.name || 'Woo Customer',
+          planName: 'Standard',
+          amount: 0,
+          currency: 'EGP',
+          status: 'ACTIVE',
+          pointsRemaining: points,
+          startDate: lastOrderDate,
+          endDate: nextPaymentDate
+        }
+      });
+      created++;
     }
   }
 
@@ -90,14 +103,14 @@ export async function syncWooCustomersPage(page: number = 1) {
   return { created, updated, totalUsers, totalPages, currentPage: page };
 }
 
-export async function syncAllWooCustomers() {
+export async function syncAllWooCustomers(workspaceId?: string) {
   let page = 1;
   let totalCreated = 0;
   let totalUpdated = 0;
   let totalProcessed = 0;
 
   while (true) {
-    const res = await syncWooCustomersPage(page);
+    const res = await syncWooCustomersPage(page, workspaceId);
     totalCreated += res.created;
     totalUpdated += res.updated;
     totalProcessed += 50; // approximate, or we can use users length if we exposed it

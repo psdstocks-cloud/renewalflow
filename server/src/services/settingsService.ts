@@ -146,12 +146,12 @@ export async function updateSettings(payload: Partial<SettingsResponse>) {
  * INTERNAL USE ONLY: Get settings with full unmasked credentials.
  * NEVER expose this result to the frontend API.
  */
-export async function getUnmaskedSettings(): Promise<SettingsResponse> {
+export async function getUnmaskedSettings(workspaceId?: string): Promise<SettingsResponse> {
   const [reminderConfig, emailTemplate, adminWhatsApp, wooSettings] = await Promise.all([
-    getSetting<ReminderConfig>(REMINDER_KEY),
-    getSetting<EmailTemplateConfig>(EMAIL_TEMPLATE_KEY),
-    getSetting<WhatsAppConfig>(WHATSAPP_KEY),
-    getSetting<WooSettings>(WOO_KEY)
+    getSetting<ReminderConfig>(REMINDER_KEY, workspaceId),
+    getSetting<EmailTemplateConfig>(EMAIL_TEMPLATE_KEY, workspaceId),
+    getSetting<WhatsAppConfig>(WHATSAPP_KEY, workspaceId),
+    getSetting<WooSettings>(WOO_KEY, workspaceId)
   ]);
 
   let processedWooSettings = null;
