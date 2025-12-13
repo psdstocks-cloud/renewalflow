@@ -55,6 +55,8 @@ const Dashboard: React.FC = () => {
   // UI State
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncingWoo, setIsSyncingWoo] = useState(false);
+  const [syncLog, setSyncLog] = useState('');
   const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
 
   // Subscribers Listing State
@@ -177,6 +179,21 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleSyncWoo = async () => {
+    setIsSyncingWoo(true);
+    setSyncLog('Starting sync...');
+    try {
+      const res = await apiFetch<{ message: string; details?: any }>('/api/woo/sync', { method: 'POST' });
+      setSyncLog(`Success: ${res.message}`);
+      // Refresh stats after sync
+      loadInitialData();
+    } catch (err: any) {
+      setSyncLog(`Error: ${err.message || 'Sync failed'}`);
+    } finally {
+      setIsSyncingWoo(false);
+    }
+  };
+
   const handleLogout = async () => {
     await signOut();
     navigate('/auth/sign-in');
@@ -251,9 +268,9 @@ const Dashboard: React.FC = () => {
             onRegenerateKey={() => { }}
             onSave={handleSaveSettings}
             isSaving={isSaving}
-            onSyncWoo={() => { }}
-            isSyncingWoo={false}
-            syncLog=""
+            onSyncWoo={handleSyncWoo}
+            isSyncingWoo={isSyncingWoo}
+            syncLog={syncLog}
           />
         )}
 
