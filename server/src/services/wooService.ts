@@ -2,88 +2,31 @@ import { prisma } from '../config/db';
 import { getUnmaskedSettings } from './settingsService';
 import { addDays } from 'date-fns';
 
-interface WooOrder {
-  id: number;
-  total: string;
-  currency: string;
-  date_created: string;
-  billing: {
-    first_name: string;
-    last_name: string;
-    email: string;
-  };
-}
-
 export async function syncWooOrders() {
   const { wooSettings } = await getUnmaskedSettings();
   if (!wooSettings) {
     throw new Error('WooCommerce settings are missing');
   }
 
-  const url = `${wooSettings.url.replace(/\/$/, '')}/wp-json/wc/v3/orders?status=processing,completed&per_page=20`;
+  // Debug Probe: Fetch 1 customer to find the Points Key
+  const url = `${wooSettings.url.replace(/\/$/, '')}/wp-json/wc/v3/customers?per_page=1`;
   const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${auth}`
-    }
-  });
+  const response = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
 
   if (!response.ok) {
-    throw new Error(`WooCommerce sync failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Sync failed: ${response.status} ${response.statusText}`);
   }
 
-  const orders = (await response.json()) as WooOrder[];
-  let created = 0;
-  let updated = 0;
-
-  for (const order of orders) {
-    if (!order.billing.email) continue;
-    const customerName = `${order.billing.first_name} ${order.billing.last_name}`.trim();
-    const amount = parseFloat(order.total);
-    const points = Math.floor(amount * wooSettings.pointsPerCurrency);
-    const startDate = new Date(order.date_created);
-    const endDate = addDays(startDate, 30);
-
-    const existing = await prisma.subscriber.findUnique({ where: { email: order.billing.email } });
-    if (existing) {
-      await prisma.subscriber.update({
-        where: { id: existing.id },
-        data: {
-          planName: existing.planName ?? 'Woo Order',
-          amount,
-          currency: order.currency ?? existing.currency,
-          endDate: addDays(existing.endDate, 30),
-          pointsRemaining: existing.pointsRemaining + points,
-          status: 'ACTIVE'
-        }
-      });
-      updated += 1;
-    } else {
-      // Get default workspace ID
-      const workspace = await prisma.workspace.findFirst();
-      if (!workspace) {
-        throw new Error('No workspace found. Please bootstrap a workspace first.');
-      }
-      await prisma.subscriber.create({
-        data: {
-          workspaceId: workspace.id,
-          name: customerName || 'Woo Customer',
-          email: order.billing.email,
-          phone: undefined,
-          planName: 'Woo Order',
-          amount,
-          currency: order.currency ?? 'EGP',
-          pointsRemaining: points,
-          status: 'ACTIVE',
-          startDate,
-          endDate,
-          paymentLink: undefined
-        }
-      });
-      created += 1;
-    }
+  const customers = await response.json();
+  if (customers.length === 0) {
+    throw new Error("Connected successfully, but found NO customers.");
   }
 
-  return { created, updated, totalOrdersProcessed: orders.length };
+  const sample = customers[0];
+  // Inspect meta_data to find points
+  const metaKeys = sample.meta_data?.map((m: any) => `${m.key}: ${m.value}`).join(', ');
+
+  // We intentionally throw this to see the data in the UI
+  throw new Error(`DEBUG: Found Customer ${sample.email}. Keys: ${Object.keys(sample).join(', ')}. Meta: ${metaKeys}`);
 }
