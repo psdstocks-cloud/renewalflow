@@ -8,25 +8,29 @@ export async function syncWooOrders() {
     throw new Error('WooCommerce settings are missing');
   }
 
-  // Debug Probe: Fetch 1 customer to find the Points Key
-  const url = `${wooSettings.url.replace(/\/$/, '')}/wp-json/wc/v3/customers?per_page=1`;
+  // Debug Probe 2: Target specific user and specific Points API
+  // User from screenshot: psdstockss@gmail.com
+  const emailToFind = 'psdstockss@gmail.com';
+
+  const searchUrl = `${wooSettings.url.replace(/\/$/, '')}/wp-json/wc/v3/customers?email=${emailToFind}`;
   const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
+  const headers = { Authorization: `Basic ${auth}` };
 
-  const response = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  const searchRes = await fetch(searchUrl, { headers });
+  if (!searchRes.ok) throw new Error(`Search failed: ${searchRes.status}`);
 
-  if (!response.ok) {
-    throw new Error(`Sync failed: ${response.status} ${response.statusText}`);
-  }
+  const found = await searchRes.json();
+  if (found.length === 0) throw new Error(`User ${emailToFind} not found via API.`);
 
-  const customers = await response.json();
-  if (customers.length === 0) {
-    throw new Error("Connected successfully, but found NO customers.");
-  }
+  const user = found[0];
+  const userId = user.id;
 
-  const sample = customers[0];
-  // Inspect meta_data to find points
-  const metaKeys = sample.meta_data?.map((m: any) => `${m.key}: ${m.value}`).join(', ');
+  // Try the official Points & Rewards endpoint
+  const pointsUrl = `${wooSettings.url.replace(/\/$/, '')}/wp-json/wc-points-rewards/v1/customers/${userId}`;
+  const pointsRes = await fetch(pointsUrl, { headers });
 
-  // We intentionally throw this to see the data in the UI
-  throw new Error(`DEBUG: Found Customer ${sample.email}. Keys: ${Object.keys(sample).join(', ')}. Meta: ${metaKeys}`);
+  const pointsStatus = pointsRes.status;
+  const pointsData = await pointsRes.text(); // Get text in case it's not JSON
+
+  throw new Error(`DEBUG 2: User ${userId} found. Points API (${pointsUrl}) Status: ${pointsStatus}. Body: ${pointsData.substring(0, 200)}`);
 }
