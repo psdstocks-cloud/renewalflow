@@ -60,6 +60,162 @@ const Dashboard: React.FC = () => {
   const [syncLog, setSyncLog] = useState('');
   const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
 
+  // --- Effects ---
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'subscribers') {
+      loadSubscribers(subPage, searchQuery);
+    }
+  }, [subPage, searchQuery, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'integrations') {
+      loadConnections();
+    }
+  }, [activeTab]);
+
+  // --- Data Loading ---
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    try {
+      const [settingsRes, statsRes, tasksRes] = await Promise.all([
+        apiFetch<AppSettings>('/api/settings'),
+        apiFetch<SubscriberStats>('/api/subscribers/stats'),
+        apiFetch<ReminderTask[]>('/api/reminders/tasks'),
+      ]);
+
+      setReminderConfig(settingsRes.reminderConfig || defaultReminderConfig);
+      setEmailTemplate(settingsRes.emailTemplate || defaultEmailTemplate);
+      setWooSettings(settingsRes.wooSettings || defaultWooSettings);
+      setAdminWhatsApp(settingsRes.adminWhatsApp || defaultAdminWhatsApp);
+
+      setStats(statsRes);
+      setTasks(tasksRes);
+    } catch (err) {
+      console.error('Failed to load dashboard data', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadSubscribers = async (page: number, q: string) => {
+    try {
+      const res = await fetchSubscribers({ page, pageSize: 25, q });
+      setSubscribers(res.data || res.items || []);
+      setSubTotal(res.meta?.totalItems || res.total || 0);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const loadConnections = async () => {
+    try {
+      const res = await apiFetch<WebsiteConnection[]>('/api/website-connections');
+      setConnections(res);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // --- Actions ---
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    try {
+      await apiFetch('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings })
+      });
+      alert('Settings saved!');
+    } catch (err) {
+      alert('Failed to save settings');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSendReminder = async (task: ReminderTask) => {
+    setSendingTaskId(task.id);
+    try {
+      const res = await apiFetch<ReminderSendResponse>('/api/reminders/send', {
+        method: 'POST',
+        body: JSON.stringify({ taskId: task.id })
+      });
+      if (res.success) {
+        setTasks(prev => prev.filter(t => t.id !== task.id));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSendingTaskId(null);
+    }
+  };
+
+  const handleCreateConnection = async (url: string) => {
+    try {
+      const res = await apiFetch<WebsiteConnection>('/api/website-connections', {
+        method: 'POST',
+        body: JSON.stringify({ websiteUrl: url })
+      });
+      setConnections([res, ...connections]);
+    } catch (err) {
+      alert('Failed to create connection');
+    }
+  };
+
+  const handleDeleteConnection = async (id: string) => {
+    if (!confirm('Delete this connection?')) return;
+    try {
+      await apiFetch(`/api/website-connections/${id}`, { method: 'DELETE' });
+      setConnections(connections.filter(c => c.id !== id));
+    } catch (err) {
+      alert('Failed error');
+    }
+  };
+
+  const handleSyncWoo = async () => {
+    setIsSyncingWoo(true);
+    setSyncLog('Starting sync...');
+    try {
+      // Step 1: Fetch Page 1 to get total pages
+      let totalCreated = 0;
+      let totalUpdated = 0;
+
+      setSyncLog(`Syncing page 1...`);
+      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
+
+      totalCreated += firstRes.created;
+      totalUpdated += firstRes.updated;
+      const totalPages = firstRes.totalPages;
+      const totalUsers = firstRes.totalUsers;
+
+      if (totalPages > 1) {
+        for (let p = 2; p <= totalPages; p++) {
+          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
+          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
+          totalCreated += res.created;
+          totalUpdated += res.updated;
+        }
+      }
+
+      setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
+      loadSubscribers(subPage, searchQuery); // Refresh the table
+      loadInitialData(); // Refresh stats as well
+    } catch (err: any) {
+      console.error(err);
+      setSyncLog(`Error: ${err.message}`);
+    } finally {
+      setIsSyncingWoo(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/auth/sign-in');
+  };
+
   const handleDeleteSubscriber = async (id: string) => {
     if (!confirm(t('confirm_delete'))) return;
     try {
@@ -70,68 +226,108 @@ const Dashboard: React.FC = () => {
     }
   };
 
-... (in render)
+  // --- Render ---
+  return (
+    <DashboardLayout activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout}>
+
+      {/* Overview Stats (Always Visible on Overview/Action tabs) */}
+      {(activeTab === 'overview' || activeTab === 'action') && stats && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 animate-fade-in-up">
+          <StatCard
+            label={t('active_subscribers')}
+            value={stats.totalActive.toString()}
+            icon="fa-users" color="violet"
+          />
+          <StatCard
+            label="Points Liability"
+            value={stats.totalPointsRemaining.toLocaleString()}
+            trend="Unredeemed points" trendUp={false}
+            icon="fa-coins" color="cyan"
+          />
+          <StatCard
+            label={t('churn_risk')}
+            value={stats.totalExpired.toString()}
+            trend={`${stats.expiringSoonCount} expiring soon`} trendUp={false}
+            icon="fa-user-times" color="rose"
+          />
+          <StatCard
+            label={t('revenue_recovered')}
+            value="$0"
+            trend="Not available" trendUp={true}
+            icon="fa-check-circle" color="emerald"
+          />
+        </div>
+      )}
+
+      <div className="animate-fade-in-up animation-delay-100">
+        {activeTab === 'action' && (
+          <ActionCenter
+            tasks={tasks}
+            onSend={handleSendReminder}
+            sendingTaskId={sendingTaskId}
+            onSendBatch={() => { }}
+            isBatchSending={false}
+          />
+        )}
+        activeTab === 'subscribers' && (
+        <>
+          <SubscribersView
+            subscribers={subscribers}
+            isLoading={false}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            page={subPage}
+            total={subTotal}
+            onPageChange={setSubPage}
+            onAddSubscriber={() => { }} // TODO: Add create modal
+            onEdit={setEditingSubscriber}
+            onDelete={handleDeleteSubscriber}
+          />
+          <EditSubscriberModal
+            isOpen={!!editingSubscriber}
+            onClose={() => setEditingSubscriber(null)}
+            subscriber={editingSubscriber}
+            onSuccess={() => {
+              loadSubscribers(subPage, searchQuery);
+              loadInitialData(); // Refresh stats
+            }}
+          />
+        </>
+        )
+}
 
         {
-  activeTab === 'subscribers' && (
-    <>
-      <SubscribersView
-        subscribers={subscribers}
-        isLoading={false}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        page={subPage}
-        total={subTotal}
-        onPageChange={setSubPage}
-        onAddSubscriber={() => { }} // TODO: Add create modal
-        onEdit={setEditingSubscriber}
-        onDelete={handleDeleteSubscriber}
-      />
-      <EditSubscriberModal
-        isOpen={!!editingSubscriber}
-        onClose={() => setEditingSubscriber(null)}
-        subscriber={editingSubscriber}
-        onSuccess={() => {
-          loadSubscribers(subPage, searchQuery);
-          loadInitialData(); // Refresh stats
-        }}
-      />
-    </>
-  )
-}
+          activeTab === 'integrations' && (
+            <IntegrationsView
+              wooSettings={wooSettings}
+              setWooSettings={setWooSettings}
+              connections={connections}
+              onCreateConnection={handleCreateConnection}
+              onDeleteConnection={handleDeleteConnection}
+              onRegenerateKey={() => { }}
+              onSave={handleSaveSettings}
+              isSaving={isSaving}
+              onSyncWoo={handleSyncWoo}
+              isSyncingWoo={isSyncingWoo}
+              syncLog={syncLog}
+            />
+          )
+        }
 
-{
-  activeTab === 'integrations' && (
-    <IntegrationsView
-      wooSettings={wooSettings}
-      setWooSettings={setWooSettings}
-      connections={connections}
-      onCreateConnection={handleCreateConnection}
-      onDeleteConnection={handleDeleteConnection}
-      onRegenerateKey={() => { }}
-      onSave={handleSaveSettings}
-      isSaving={isSaving}
-      onSyncWoo={handleSyncWoo}
-      isSyncingWoo={isSyncingWoo}
-      syncLog={syncLog}
-    />
-  )
-}
-
-{
-  activeTab === 'settings' && (
-    <SettingsView
-      reminderConfig={reminderConfig}
-      setReminderConfig={setReminderConfig}
-      emailTemplate={emailTemplate}
-      setEmailTemplate={setEmailTemplate}
-      adminWhatsApp={adminWhatsApp}
-      setAdminWhatsApp={setAdminWhatsApp}
-      onSave={handleSaveSettings}
-      isSaving={isSaving}
-    />
-  )
-}
+        {
+          activeTab === 'settings' && (
+            <SettingsView
+              reminderConfig={reminderConfig}
+              setReminderConfig={setReminderConfig}
+              emailTemplate={emailTemplate}
+              setEmailTemplate={setEmailTemplate}
+              adminWhatsApp={adminWhatsApp}
+              setAdminWhatsApp={setAdminWhatsApp}
+              onSave={handleSaveSettings}
+              isSaving={isSaving}
+            />
+          )
+        }
       </div >
     </DashboardLayout >
   );
