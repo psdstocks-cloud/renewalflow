@@ -39,6 +39,7 @@ export interface WooSettings {
   consumerKey: string;
   consumerSecret: string;
   pointsPerCurrency: number;
+  lastSync?: string;
 }
 
 export interface AppSettings {

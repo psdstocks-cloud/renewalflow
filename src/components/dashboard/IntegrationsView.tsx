@@ -88,6 +88,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                         <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
                                     </div>
                                 )}
+                                {wooSettings.lastSync && (
+                                    <div className="text-xs text-zinc-500 text-center">
+                                        Last synced: {new Date(wooSettings.lastSync).toLocaleString()}
+                                    </div>
+                                )}
                             </div>
                             {syncLog && (
                                 <div className={`mt-2 p-3 rounded-lg text-xs font-mono border ${syncLog.startsWith('Error') ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-black/40 text-green-400 border-white/5'}`}>

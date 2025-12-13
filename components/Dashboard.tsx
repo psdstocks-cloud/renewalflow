@@ -207,8 +207,18 @@ const Dashboard: React.FC = () => {
       }
 
       setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
+
+      // Update last sync time
+      const now = new Date().toISOString();
+      const newWooSettings = { ...wooSettings, lastSync: now };
+      await apiFetch('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
+      });
+      setWooSettings(newWooSettings);
+
       loadSubscribers(subPage, searchQuery); // Refresh the table
-      loadInitialData(); // Refresh stats as well
+      loadInitialData(); // Refresh stats as well // Actually redundant if we updated settings manually, but good for stats
     } catch (err: any) {
       console.error(err);
       setSyncLog(`Error: ${err.message}`);

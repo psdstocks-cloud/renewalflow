@@ -34,7 +34,13 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   let updated = 0;
 
   console.log(`[Sync] Fetching page ${page} with limit ${limit}`);
-  const response = await fetch(`${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`, { headers });
+  let url = `${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`;
+  if (wooSettings.lastSync) {
+    console.log(`[Sync] Incremental sync since: ${wooSettings.lastSync}`);
+    url += `&updated_after=${encodeURIComponent(wooSettings.lastSync)}`;
+  }
+
+  const response = await fetch(url, { headers });
   console.log(`[Sync] Response status: ${response.status}`);
 
   if (!response.ok) {
