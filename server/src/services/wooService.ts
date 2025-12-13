@@ -34,11 +34,18 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   let updated = 0;
 
   console.log(`[Sync] Fetching page ${page} with limit ${limit}`);
+
+  // Add secret key for security
   let url = `${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`;
+
   if (wooSettings.lastSync) {
-    console.log(`[Sync] Incremental sync since: ${wooSettings.lastSync}`);
+    console.log(`[Sync] Found lastSync: ${wooSettings.lastSync}`);
     url += `&updated_after=${encodeURIComponent(wooSettings.lastSync)}`;
+  } else {
+    console.log(`[Sync] No lastSync found in settings. Performing full sync.`);
   }
+
+  console.log(`[Sync] Fetching: ${url.replace('renewalflow_secure_sync_2024', 'REDACTED')}`);
 
   const response = await fetch(url, { headers });
   console.log(`[Sync] Response status: ${response.status}`);
@@ -160,24 +167,24 @@ export async function fetchUserPointsHistory(email: string, workspaceId?: string
   }
 
   // Use the custom endpoint we added to the plugin
-  const baseUrl = `${wooSettings.url.replace(/\/$/, '')}/wp-json/artly/v1/user-history`;
-  const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
-  const headers = { Authorization: `Basic ${auth}` };
+  const baseUrl = `${wooSettings.url.replace(/\/$/, '')} /wp-json/artly / v1 / user - history`;
+  const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret} `).toString('base64');
+  const headers = { Authorization: `Basic ${auth} ` };
 
-  const url = `${baseUrl}?email=${encodeURIComponent(email)}&secret=renewalflow_secure_sync_2024`;
+  const url = `${baseUrl}?email = ${encodeURIComponent(email)}& secret=renewalflow_secure_sync_2024`;
 
   try {
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
-      console.warn(`[Woo] History fetch failed: ${response.status} ${response.statusText}`);
+      console.warn(`[Woo] History fetch failed: ${response.status} ${response.statusText} `);
       return [];
     }
 
     const data = await response.json();
     return Array.isArray(data) ? data : [];
   } catch (err) {
-    console.error(`[Woo] History fetch error:`, err);
+    console.error(`[Woo] History fetch error: `, err);
     return [];
   }
 }

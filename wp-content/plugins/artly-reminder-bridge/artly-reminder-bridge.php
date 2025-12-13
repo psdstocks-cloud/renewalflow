@@ -252,54 +252,78 @@ function artly_handle_sync_request(WP_REST_Request $request)
 
   if (!empty($updated_after)) {
     global $wpdb;
-    $date_str = gmdate('Y-m-d H:i:s', strtotime($updated_after));
-    $user_ids = array();
 
-    // 1. Users created after date
-    $new_users = get_users(array(
-      'date_query' => array(array('after' => $date_str, 'inclusive' => true)),
-      'fields' => 'ID',
-    ));
-    $user_ids = array_merge($user_ids, $new_users);
+    // Debug logging
+    artly_reminder_bridge_log("Sync requested with updated_after: " . $updated_after);
 
-    // 2. Users with orders modified after date
-    // WC_Order_Query is heavy, use SQL for speed
-    $order_users = $wpdb->get_col($wpdb->prepare(
-      "SELECT DISTINCT pm.meta_value FROM {$wpdb->posts} p
-       INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
-       WHERE p.post_type = 'shop_order'
-       AND p.post_modified > %s
-       AND pm.meta_key = '_customer_user'
-       AND pm.meta_value > 0",
-      $date_str
-    ));
-    $user_ids = array_merge($user_ids, array_map('intval', $order_users));
+    $timestamp = strtotime($updated_after);
+    if (!$timestamp) {
+      artly_reminder_bridge_log("Failed to parse updated_after date. Falling back to full sync.");
+      // If we can't parse date, we might want to return everything or error?
+      // Currently behavior matches "start from scratch", so valid.
+      // But let's try to handle strict ISO if strtotime fails often (unlikely for ISO).
+      // Fallback to empty to trigger full sync
+    } else {
+      $date_str = gmdate('Y-m-d H:i:s', $timestamp);
+      $user_ids = array();
 
-    // 3. Messages/Points Log after date
-    if (class_exists('WC_Points_Rewards_Manager')) {
-      $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
-      $points_users = $wpdb->get_col($wpdb->prepare(
-        "SELECT DISTINCT user_id FROM {$log_table} WHERE date > %s",
+      // 1. Users created after date (user_registered is GMT)
+      $new_users = get_users(array(
+        'date_query' => array(array('after' => $date_str, 'inclusive' => true)),
+        'fields' => 'ID',
+      ));
+      if (!empty($new_users)) {
+        $user_ids = array_merge($user_ids, $new_users);
+      }
+
+      // 2. Users with orders modified after date (use GMT)
+      // Check if post_modified_gmt exists/is populated (usually yes for orders)
+      $order_users = $wpdb->get_col($wpdb->prepare(
+        "SELECT DISTINCT pm.meta_value FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+        WHERE p.post_type = 'shop_order'
+        AND p.post_modified_gmt > %s
+        AND pm.meta_key = '_customer_user'
+        AND pm.meta_value > 0",
         $date_str
       ));
-      $user_ids = array_merge($user_ids, array_map('intval', $points_users));
+      if (!empty($order_users)) {
+        $user_ids = array_merge($user_ids, array_map('intval', $order_users));
+      }
+
+      // 3. Messages/Points Log after date
+      if (class_exists('WC_Points_Rewards_Manager')) {
+        $log_table = $wpdb->prefix . 'wc_points_rewards_user_points_log';
+        // Check if valid table
+        if ($wpdb->get_var("SHOW TABLES LIKE '$log_table'") == $log_table) {
+          // Point log `date` is usually local/server time. 
+          // We compare against GMT date string. 
+          // This might be slightly off if server time != GMT, but it's acceptable for now 
+          // as we prefer over-fetching to under-fetching.
+          $points_users = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT user_id FROM {$log_table} WHERE date > %s",
+            $date_str
+          ));
+          if (!empty($points_users)) {
+            $user_ids = array_merge($user_ids, array_map('intval', $points_users));
+          }
+        }
+      }
+
+      $user_ids = array_unique($user_ids);
+
+      if (empty($user_ids)) {
+        // No changes found
+        return new WP_REST_Response(array(
+          'data' => array(),
+          'meta' => array('page' => $page, 'limit' => $limit, 'total_users' => 0)
+        ), 200);
+      }
+
+      $args['include'] = $user_ids;
     }
-
-    $user_ids = array_unique($user_ids);
-
-    if (empty($user_ids)) {
-      // No changes
-      return new WP_REST_Response(array(
-        'data' => array(),
-        'meta' => array('page' => $page, 'limit' => $limit, 'total_users' => 0)
-      ), 200);
-    }
-
-    $args['include'] = $user_ids;
-    // When using 'include', 'offset' works on the included list
-    // But we need to be careful if user_ids is huge.
-    // Ideally we filter first then slice.
   }
+  // Ideally we filter first then slice.
 
   // Get users (Subscribers + Customers)
   $users = get_users($args);
@@ -2118,171 +2142,186 @@ function artly_reminder_bridge_render_admin_page(): void
       }
     </style>
     <script>
-      (function () {
-        const syncBtn = docu      ment.getElementById('artly-sync-points-btn');
-        const cancelBtn = document.getElementById('artly-cancel-sync-btn');
-        const progressDiv = document.getElementById('artly-sync-progress');
-        const progressMessage = document.getElementById('artly-progress-message');
-        const progressBar = document.getElementById('artly-progress-bar');
-        const progressPercentage = document.getElementById('artly-progress-percentage');
-        const progressDetails = document.getElementById('artly-progress-details');
-        let progressInterval = null;
-        let totalToSync = 0;
-        let isCancelled = false;
+       (function () {
+          const syncBtn = docu      ment.getElementById('artly-sync-points-btn');
+          const cancelBtn = document.getElementById('artly-cancel-sync-btn');
+          const progressDiv = document.getElementById('artly-sync-progress');
+          const progressMessage = document.getElementById('artly-progress-message');
+          const progressBar = document.getElementById('artly-progress-bar');
+          const progressPercentage = document.getElementById('artly-progress-percentage');
+          const progressDetails = document.getElementById('artly-progress-details');
+          let progressInterval = null;
+          let totalToSync = 0;
+          let isCancelled = false;
 
-        function formatNumber(num) {
-          return new Intl.NumberFormat().format(num);
-        }
-
-        let currentJobId = null;
-
-        function updateProgress() {
-          if (!currentJobId) {
-            // No job ID, stop polling
-            if (syncBtn) {
-              syncBtn.disabled = false;
-            }
-            if (progressInterval) {
-              clearTimeout(progressInterval);
-            }
-            return;
+          function formatNumber(num) {
+            return new Intl.NumberFormat().format(num);
           }
 
-          fetch(ajaxurl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              action: 'artly_get_sync_job_status',
-              jobId: currentJobId,
-              _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
-            }),
-          })
-            .then(response => response.json())
-            .then(data => {
-              if (data.success && data.data) {
-                const progress = data.data;
+          let currentJobId = null;
 
-                if (progress.status === 'running' || progress.status === 'pending') {
-                  progressDiv.style.display = 'block';
-                  progressMessage.textContent = progress.message || 'Syncing...';
+          function updateProgress() {
+            if (!currentJobId) {
+              // No job ID, stop polling
+              if (syncBtn) {
+                syncBtn.disabled = false;
+              }
+              if (progressInterval) {
+                clearTimeout(progressInterval);
+              }
+              return;
+            }
 
-                  const percentage = progress.progress || (progress.total > 0
-                    ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
-                    : 0);
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_get_sync_job_status',
+                jobId: currentJobId,
+                _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
+              }),
+            })
+              .then(response => response.json())
+              .then(data => {
+                if (data.success && data.data) {
+                  const progress = data.data;
 
-                  progressBar.style.width = percentage + '%';
-                  progressPercentage.textContent = percentage + '%';
+                  if (progress.status === 'running' || progress.status === 'pending') {
+                    progressDiv.style.display = 'block';
+                    progressMessage.textContent = progress.message || 'Syncing...';
 
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
-                  const imported = formatNumber(progress.imported || progress.processed || 0);
+                    const percentage = progress.progress || (progress.total > 0
+                      ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
+                      : 0);
 
-                  progressDetails.innerHTML = `
+                    progressBar.style.width = percentage + '%';
+                    progressPercentage.textContent = percentage + '%';
+
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
+                    const imported = formatNumber(progress.imported || progress.processed || 0);
+
+                    progressDetails.innerHTML = `
               <strong>Processed:</strong> ${processed} / ${total} users<br>
               <strong>Updated:</strong> ${imported} balances<br>
               <strong>Progress:</strong> ${percentage}% complete
             `;
 
-                  // Continue polling every 1-2 seconds
-                  if (progressInterval) {
-                    clearTimeout(progressInterval);
-                  }
-                  progressInterval = setTimeout(updateProgress, 1500);
-                } else if (progress.status === 'completed') {
-                  progressDiv.style.display = 'block';
-                  progressMessage.textContent = progress.message || progress.result?.message || '✅ Sync completed successfully!';
-                  progressBar.style.width = '100%';
-                  progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
-                  progressPercentage.textContent = '100%';
+                    // Continue polling every 1-2 seconds
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
+                    }
+                    progressInterval = setTimeout(updateProgress, 1500);
+                  } else if (progress.status === 'completed') {
+                    progressDiv.style.display = 'block';
+                    progressMessage.textContent = progress.message || progress.result?.message || '✅ Sync completed successfully!';
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                    progressPercentage.textContent = '100%';
 
-                  const processed = formatNumber(progress.processed || 0);
-                  const imported = formatNumber(progress.imported || progress.result?.count || 0);
+                    const processed = formatNumber(progress.processed || 0);
+                    const imported = formatNumber(progress.imported || progress.result?.count || 0);
 
-                  progressDetails.innerHTML = `
+                    progressDetails.innerHTML = `
               <strong style="color: #46b450;">✓ Completed!</strong><br>
               <strong>Total processed:</strong> ${processed} users<br>
               <strong>Total updated:</strong> ${imported} balances
             `;
 
-                  if (syncBtn) {
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (cancelBtn) {
-                    cancelBtn.style.display = 'none';
-                  }
+                    if (syncBtn) {
+                      syncBtn.disabled = false;
+                      syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (cancelBtn) {
+                      cancelBtn.style.display = 'none';
+                    }
 
-                  if (progressInterval) {
-                    clearTimeout(progressInterval);
-                  }
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
+                    }
 
-                  currentJobId = null; // Clear job ID
+                    currentJobId = null; // Clear job ID
 
-                  // Clear progress after 8 seconds
-                  setTimeout(() => {
-                    progressDiv.style.display = 'none';
-                    // Reload page to update the count
-                    location.reload();
-                  }, 8000);
-                } else if (progress.status === 'failed' || progress.status === 'error') {
-                  progressDiv.style.display = 'block';
-                  progressMessage.textContent = '❌ ' + (progress.error || progress.message || 'Sync failed!');
-                  progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                    // Clear progress after 8 seconds
+                    setTimeout(() => {
+                      progressDiv.style.display = 'none';
+                      // Reload page to update the count
+                      location.reload();
+                    }, 8000);
+                  } else if (progress.status === 'failed' || progress.status === 'error') {
+                    progressDiv.style.display = 'block';
+                    progressMessage.textContent = '❌ ' + (progress.error || progress.message || 'Sync failed!');
+                    progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
 
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
 
-                  progressDetails.innerHTML = `
+                    progressDetails.innerHTML = `
               <strong style="color: #dc3232;">✗ Error occurred</strong><br>
               <strong>Processed:</strong> ${processed} / ${total} users<br>
               <strong>Error:</strong> ${progress.error || progress.message || 'Unknown error'}
             `;
 
-                  if (syncBtn) {
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (cancelBtn) {
-                    cancelBtn.style.display = 'none';
-                  }
+                    if (syncBtn) {
+                      syncBtn.disabled = false;
+                      syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (cancelBtn) {
+                      cancelBtn.style.display = 'none';
+                    }
 
-                  if (progressInterval) {
-                    clearTimeout(progressInterval);
-                  }
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
+                    }
 
-                  currentJobId = null; // Clear job ID
-                } else if (progress.status === 'cancelled') {
-                  progressDiv.style.display = 'block';
-                  progressMessage.textContent = '⚠️ Sync cancelled';
-                  progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                    currentJobId = null; // Clear job ID
+                  } else if (progress.status === 'cancelled') {
+                    progressDiv.style.display = 'block';
+                    progressMessage.textContent = '⚠️ Sync cancelled';
+                    progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
 
-                  if (syncBtn) {
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (cancelBtn) {
-                    cancelBtn.style.display = 'none';
-                  }
+                    if (syncBtn) {
+                      syncBtn.disabled = false;
+                      syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (cancelBtn) {
+                      cancelBtn.style.display = 'none';
+                    }
 
-                  if (progressInterval) {
-                    clearTimeout(progressInterval);
-                  }
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
+                    }
 
-                  currentJobId = null; // Clear job ID
+                    currentJobId = null; // Clear job ID
+                  } else {
+                    // Unknown status, stop polling
+                    if (syncBtn) {
+                      syncBtn.disabled = false;
+                    }
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
+                    }
+                    currentJobId = null;
+                  }
                 } else {
-                  // Unknown status, stop polling
+                  // Error response, stop polling
                   if (syncBtn) {
                     syncBtn.disabled = false;
+                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                  }
+                  if (cancelBtn) {
+                    cancelBtn.style.display = 'none';
                   }
                   if (progressInterval) {
                     clearTimeout(progressInterval);
                   }
                   currentJobId = null;
                 }
-              } else {
-                // Error response, stop polling
+              })
+              .catch(error => {
+                console.error('Error fetching progress:', error);
                 if (syncBtn) {
                   syncBtn.disabled = false;
                   syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
@@ -2294,56 +2333,105 @@ function artly_reminder_bridge_render_admin_page(): void
                   clearTimeout(progressInterval);
                 }
                 currentJobId = null;
-              }
-            })
-            .catch(error => {
-              console.error('Error fetching progress:', error);
-              if (syncBtn) {
-                syncBtn.disabled = false;
-                syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-              }
-              if (cancelBtn) {
-                cancelBtn.style.display = 'none';
-              }
-              if (progressInterval) {
-                clearTimeout(progressInterval);
-              }
-              currentJobId = null;
-            });
-        }
+              });
+          }
 
-        if (syncBtn) {
-          syncBtn.addEventListener('click', function (e) {
-            e.preventDefault();
+          if (syncBtn) {
+            syncBtn.addEventListener('click', function (e) {
+              e.preventDefault();
 
-            // Get total count first
-            fetch(ajaxurl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-              body: new URLSearchParams({
-                action: 'artly_get_points_count',
-                _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
-              }),
-            })
-              .then(response => response.json())
-              .then(data => {
-                if (data.success && data.data) {
-                  totalToSync = data.data.total || 0;
+              // Get total count first
+              fetch(ajaxurl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                  action: 'artly_get_points_count',
+                  _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
+                }),
+              })
+                .then(response => response.json())
+                .then(data => {
+                  if (data.success && data.data) {
+                    totalToSync = data.data.total || 0;
 
-                  // Show progress immediately
-                  progressDiv.style.display = 'block';
-                  progressMessage.textContent = 'Initializing balance sync...';
-                  progressBar.style.width = '0%';
-                  progressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
-                  progressPercentage.textContent = '0%';
-                  progressDetails.innerHTML = `
+                    // Show progress immediately
+                    progressDiv.style.display = 'block';
+                    progressMessage.textContent = 'Initializing balance sync...';
+                    progressBar.style.width = '0%';
+                    progressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+                    progressPercentage.textContent = '0%';
+                    progressDetails.innerHTML = `
               <strong>Total users to sync:</strong> ${formatNumber(totalToSync)} users<br>
               <strong>Status:</strong> Starting balance sync...
             `;
 
-                  // Disable sync button and show cancel button
+                    // Disable sync button and show cancel button
+                    syncBtn.disabled = true;
+                    syncBtn.textContent = 'Syncing...';
+                    if (cancelBtn) {
+                      cancelBtn.style.display = 'inline-block';
+                    }
+                    isCancelled = false;
+
+                    // Start the sync via AJAX to get jobId
+                    fetch(ajaxurl, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                      },
+                      body: new URLSearchParams({
+                        action: 'artly_start_sync_points',
+                        _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
+                      }),
+                    })
+                      .then(response => response.json())
+                      .then(data => {
+                        if (isCancelled) {
+                          return;
+                        }
+
+                        if (data.success && data.data && data.data.jobId) {
+                          // Store jobId and start polling
+                          currentJobId = data.data.jobId;
+                          updateProgress(); // Start polling immediately
+                        } else {
+                          // Error starting sync
+                          if (progressInterval) {
+                            clearTimeout(progressInterval);
+                          }
+                          progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed to start');
+                          progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                          syncBtn.disabled = false;
+                          syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                          if (cancelBtn) {
+                            cancelBtn.style.display = 'none';
+                          }
+                        }
+                      })
+                      .catch(error => {
+                        if (isCancelled) {
+                          progressMessage.textContent = '⚠️ Sync was cancelled.';
+                          progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                          return;
+                        }
+
+                        console.error('Error starting sync:', error);
+                        progressMessage.textContent = '❌ Error starting sync. Please try again.';
+                        syncBtn.disabled = false;
+                        syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                        if (cancelBtn) {
+                          cancelBtn.style.display = 'none';
+                        }
+                      });
+                  }
+                })
+                .catch(error => {
+                  console.error('Error getting count:', error);
+                  // Still try to start sync
+                  progressDiv.style.display = 'block';
+                  progressMessage.textContent = 'Starting sync...';
                   syncBtn.disabled = true;
                   syncBtn.textContent = 'Syncing...';
                   if (cancelBtn) {
@@ -2351,7 +2439,6 @@ function artly_reminder_bridge_render_admin_page(): void
                   }
                   isCancelled = false;
 
-                  // Start the sync via AJAX to get jobId
                   fetch(ajaxurl, {
                     method: 'POST',
                     headers: {
@@ -2364,424 +2451,376 @@ function artly_reminder_bridge_render_admin_page(): void
                   })
                     .then(response => response.json())
                     .then(data => {
-                      if (isCancelled) {
-                        return;
+                      if (isCancelled) return;
+
+                      if (data.success) {
+                        progressMessage.textContent = '✅ ' + (data.data.message || 'Sync completed successfully!');
+                        progressBar.style.width = '100%';
+                        progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                        progressPercentage.textContent = '100%';
+                        progressDetails.innerHTML = `<strong style="color: #46b450;">✓ Completed!</strong><br><strong>Updated:</strong> ${formatNumber(data.data.count || 0)} balances`;
+
+                        setTimeout(() => {
+                          location.reload();
+                        }, 2000);
+                      } else {
+                        progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                        progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
                       }
 
-                      if (data.success && data.data && data.data.jobId) {
-                        // Store jobId and start polling
-                        currentJobId = data.data.jobId;
-                        updateProgress(); // Start polling immediately
-                      } else {
-                        // Error starting sync
-                        if (progressInterval) {
-                          clearTimeout(progressInterval);
-                        }
-                        progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed to start');
-                        progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                      syncBtn.disabled = false;
+                      syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
+                      if (cancelBtn) {
+                        cancelBtn.style.display = 'none';
+                      }
+                    })
+                    .catch(err => {
+                      if (!isCancelled) {
+                        progressMessage.textContent = '❌ Error starting sync. Please try again.';
                         syncBtn.disabled = false;
                         syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
                         if (cancelBtn) {
                           cancelBtn.style.display = 'none';
                         }
                       }
-                    })
-                    .catch(error => {
-                      if (isCancelled) {
-                        progressMessage.textContent = '⚠️ Sync was cancelled.';
-                        progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                        return;
-                      }
-
-                      console.error('Error starting sync:', error);
-                      progressMessage.textContent = '❌ Error starting sync. Please try again.';
-                      syncBtn.disabled = false;
-                      syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                      if (cancelBtn) {
-                        cancelBtn.style.display = 'none';
-                      }
                     });
+                });
+            });
+          }
+
+          // Cancel button handler
+          if (cancelBtn) {
+            cancelBtn.addEventListener('click', function (e) {
+              e.preventDefault();
+
+              if (confirm('Are you sure you want to cancel the sync?')) {
+                isCancelled = true;
+
+                // Send cancel request with jobId if available
+                const cancelParams = {
+                  action: 'artly_cancel_sync',
+                  _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
+                };
+
+                if (currentJobId) {
+                  cancelParams.jobId = currentJobId;
                 }
-              })
-              .catch(error => {
-                console.error('Error getting count:', error);
-                // Still try to start sync
-                progressDiv.style.display = 'block';
-                progressMessage.textContent = 'Starting sync...';
-                syncBtn.disabled = true;
-                syncBtn.textContent = 'Syncing...';
-                if (cancelBtn) {
-                  cancelBtn.style.display = 'inline-block';
-                }
-                isCancelled = false;
 
                 fetch(ajaxurl, {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                   },
-                  body: new URLSearchParams({
-                    action: 'artly_start_sync_points',
-                    _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
-                  }),
+                  body: new URLSearchParams(cancelParams),
                 })
-                  .then(response => response.json())
-                  .then(data => {
-                    if (isCancelled) return;
+                  .then(() => {
+                    progressMessage.textContent = '⚠️ Cancelling sync...';
+                    cancelBtn.disabled = true;
+                    cancelBtn.textContent = 'Cancelling...';
 
-                    if (data.success) {
-                      progressMessage.textContent = '✅ ' + (data.data.message || 'Sync completed successfully!');
-                      progressBar.style.width = '100%';
-                      progressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
-                      progressPercentage.textContent = '100%';
-                      progressDetails.innerHTML = `<strong style="color: #46b450;">✓ Completed!</strong><br><strong>Updated:</strong> ${formatNumber(data.data.count || 0)} balances`;
-
-                      setTimeout(() => {
-                        location.reload();
-                      }, 2000);
-                    } else {
-                      progressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
-                      progressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                    // Stop polling
+                    if (progressInterval) {
+                      clearTimeout(progressInterval);
                     }
 
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                    if (cancelBtn) {
-                      cancelBtn.style.display = 'none';
-                    }
-                  })
-                  .catch(err => {
-                    if (!isCancelled) {
-                      progressMessage.textContent = '❌ Error starting sync. Please try again.';
+                    // Wait a moment then update UI
+                    setTimeout(() => {
+                      progressMessage.textContent = '⚠️ Sync cancelled.';
+                      progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
                       syncBtn.disabled = false;
                       syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                      if (cancelBtn) {
-                        cancelBtn.style.display = 'none';
-                      }
-                    }
+                      cancelBtn.style.display = 'none';
+                      currentJobId = null;
+                      cancelBtn.disabled = false;
+                      cancelBtn.textContent = '<?php esc_html_e('Cancel Sync', 'artly-reminder-bridge'); ?>';
+                    }, 1000);
+                  })
+                  .catch(error => {
+                    console.error('Error cancelling sync:', error);
+                    progressMessage.textContent = '⚠️ Sync cancellation requested.';
                   });
-              });
-          });
-        }
-
-        // Cancel button handler
-        if (cancelBtn) {
-          cancelBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-
-            if (confirm('Are you sure you want to cancel the sync?')) {
-              isCancelled = true;
-
-              // Send cancel request with jobId if available
-              const cancelParams = {
-                action: 'artly_cancel_sync',
-                _wpnonce: '<?php echo wp_create_nonce('artly_sync_points'); ?>',
-              };
-
-              if (currentJobId) {
-                cancelParams.jobId = currentJobId;
-              }
-
-              fetch(ajaxurl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams(cancelParams),
-              })
-                .then(() => {
-                  progressMessage.textContent = '⚠️ Cancelling sync...';
-                  cancelBtn.disabled = true;
-                  cancelBtn.textContent = 'Cancelling...';
-
-                  // Stop polling
-                  if (progressInterval) {
-                    clearTimeout(progressInterval);
-                  }
-
-                  // Wait a moment then update UI
-                  setTimeout(() => {
-                    progressMessage.textContent = '⚠️ Sync cancelled.';
-                    progressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '<?php esc_html_e('Sync Points Balances', 'artly-reminder-bridge'); ?>';
-                    cancelBtn.style.display = 'none';
-                    currentJobId = null;
-                    cancelBtn.disabled = false;
-                    cancelBtn.textContent = '<?php esc_html_e('Cancel Sync', 'artly-reminder-bridge'); ?>';
-                  }, 1000);
-                })
-                .catch(error => {
-                  console.error('Error cancelling sync:', error);
-                  progressMessage.textContent = '⚠️ Sync cancellation requested.';
-                });
-            }
-          });
-        }
-
-        // Check for existing sync on page load
-        updateProgress();
-      })();
-
-      // Users sync progress tracking
-      (function () {
-        const usersSyncBtn = document.getElementById('artly-sync-users-btn');
-        const usersCancelBtn = document.getElementById('artly-cancel-users-sync-btn');
-        const usersProgressDiv = document.getElementById('artly-users-sync-progress');
-        const usersProgressMessage = document.getElementById('artly-users-progress-message');
-        const usersProgressBar = document.getElementById('artly-users-progress-bar');
-        const usersProgressPercentage = document.getElementById('artly-users-progress-percentage');
-        const usersProgressDetails = document.getElementById('artly-users-progress-details');
-        const usersDismissBtn = document.getElementById('artly-dismiss-users-progress');
-        let usersProgressInterval = null;
-        let usersTotalToSync = 0;
-        let usersIsCancelled = false;
-
-        function clearUsersProgress() {
-          fetch(ajaxurl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              action: 'artly_clear_sync_progress',
-              _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
-            }),
-          })
-            .then(() => {
-              usersProgressDiv.style.display = 'none';
-              if (usersSyncBtn) {
-                usersSyncBtn.disabled = false;
-                usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
-              }
-            })
-            .catch(error => {
-              console.error('Error clearing progress:', error);
-            });
-        }
-
-        function formatNumber(num) {
-          return new Intl.NumberFormat().format(num);
-        }
-
-        function updateUsersProgress() {
-          fetch(ajaxurl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              action: 'artly_get_sync_progress',
-              _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
-            }),
-          })
-            .then(response => response.json())
-            .then(data => {
-              if (data.success && data.data && data.data.type === 'users') {
-                const progress = data.data;
-
-                if (progress.status === 'running') {
-                  usersProgressDiv.style.display = 'block';
-                  usersProgressMessage.textContent = progress.message || 'Syncing users...';
-
-                  const percentage = progress.total > 0
-                    ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
-                    : 0;
-
-                  usersProgressBar.style.width = percentage + '%';
-                  usersProgressPercentage.textContent = percentage + '%';
-
-                  const processed = formatNumber(progress.processed);
-                  const total = formatNumber(progress.total);
-                  const imported = formatNumber(progress.imported);
-
-                  usersProgressDetails.innerHTML = `
-              <strong>Processed:</strong> ${processed} / ${total} users<br>
-              <strong>Synced:</strong> ${imported} users<br>
-              <strong>Progress:</strong> ${percentage}% complete
-            `;
-
-                  if (usersProgressInterval) {
-                    clearTimeout(usersProgressInterval);
-                  }
-                  usersProgressInterval = setTimeout(updateUsersProgress, 800);
-                } else if (progress.status === 'completed') {
-                  usersProgressDiv.style.display = 'block';
-                  usersProgressMessage.textContent = progress.message || '✅ Users sync completed successfully!';
-                  usersProgressBar.style.width = '100%';
-                  usersProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
-                  usersProgressPercentage.textContent = '100%';
-
-                  const processed = formatNumber(progress.processed);
-                  const imported = formatNumber(progress.imported);
-
-                  usersProgressDetails.innerHTML = `
-              <strong style="color: #46b450;">✓ Completed!</strong><br>
-              <strong>Total processed:</strong> ${processed} users<br>
-              <strong>Total synced:</strong> ${imported} users
-            `;
-
-                  if (usersSyncBtn) {
-                    usersSyncBtn.disabled = false;
-                    usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (usersCancelBtn) {
-                    usersCancelBtn.style.display = 'none';
-                  }
-                  if (usersDismissBtn) {
-                    usersDismissBtn.style.display = 'block';
-                  }
-
-                  if (usersProgressInterval) {
-                    clearTimeout(usersProgressInterval);
-                  }
-
-                  clearUsersProgress();
-
-                  setTimeout(() => {
-                    usersProgressDiv.style.display = 'none';
-                    if (usersDismissBtn) {
-                      usersDismissBtn.style.display = 'none';
-                    }
-                  }, 5000);
-                } else if (progress.status === 'error') {
-                  usersProgressDiv.style.display = 'block';
-                  usersProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
-                  usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
-
-                  usersProgressDetails.innerHTML = `
-              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} users
-            `;
-
-                  if (usersSyncBtn) {
-                    usersSyncBtn.disabled = false;
-                    usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (usersCancelBtn) {
-                    usersCancelBtn.style.display = 'none';
-                  }
-                  if (usersDismissBtn) {
-                    usersDismissBtn.style.display = 'block';
-                  }
-
-                  if (usersProgressInterval) {
-                    clearTimeout(usersProgressInterval);
-                  }
-
-                  clearUsersProgress();
-                } else if (progress.status === 'cancelled') {
-                  usersProgressDiv.style.display = 'block';
-                  usersProgressMessage.textContent = '⚠️ Sync cancelled by user.';
-                  usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
-
-                  usersProgressDetails.innerHTML = `
-              <strong style="color: #d97706;">✗ Cancelled</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} users
-            `;
-
-                  if (usersSyncBtn) {
-                    usersSyncBtn.disabled = false;
-                    usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (usersCancelBtn) {
-                    usersCancelBtn.style.display = 'none';
-                  }
-                  if (usersDismissBtn) {
-                    usersDismissBtn.style.display = 'block';
-                  }
-
-                  if (usersProgressInterval) {
-                    clearTimeout(usersProgressInterval);
-                  }
-
-                  clearUsersProgress();
-                } else {
-                  if (usersProgressInterval) {
-                    clearTimeout(usersProgressInterval);
-                  }
-                }
-              } else {
-                if (usersProgressInterval) {
-                  clearTimeout(usersProgressInterval);
-                }
-              }
-            })
-            .catch(error => {
-              console.error('Error fetching users progress:', error);
-              if (usersProgressInterval) {
-                clearTimeout(usersProgressInterval);
               }
             });
-        }
+          }
 
-        if (usersSyncBtn) {
-          usersSyncBtn.addEventListener('click', function (e) {
-            e.preventDefault();
+          // Check for existing sync on page load
+          updateProgress();
+        })();
 
-            usersIsCancelled = false;
+        // Users sync progress tracking
+        (function () {
+          const usersSyncBtn = document.getElementById('artly-sync-users-btn');
+          const usersCancelBtn = document.getElementById('artly-cancel-users-sync-btn');
+          const usersProgressDiv = document.getElementById('artly-users-sync-progress');
+          const usersProgressMessage = document.getElementById('artly-users-progress-message');
+          const usersProgressBar = document.getElementById('artly-users-progress-bar');
+          const usersProgressPercentage = document.getElementById('artly-users-progress-percentage');
+          const usersProgressDetails = document.getElementById('artly-users-progress-details');
+          const usersDismissBtn = document.getElementById('artly-dismiss-users-progress');
+          let usersProgressInterval = null;
+          let usersTotalToSync = 0;
+          let usersIsCancelled = false;
 
+          function clearUsersProgress() {
             fetch(ajaxurl, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
               },
               body: new URLSearchParams({
-                action: 'artly_get_users_count',
-                _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
+                action: 'artly_clear_sync_progress',
+                _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
+              }),
+            })
+              .then(() => {
+                usersProgressDiv.style.display = 'none';
+                if (usersSyncBtn) {
+                  usersSyncBtn.disabled = false;
+                  usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
+                }
+              })
+              .catch(error => {
+                console.error('Error clearing progress:', error);
+              });
+          }
+
+          function formatNumber(num) {
+            return new Intl.NumberFormat().format(num);
+          }
+
+          function updateUsersProgress() {
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_get_sync_progress',
+                _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
               }),
             })
               .then(response => response.json())
               .then(data => {
-                if (data.success && data.data) {
-                  usersTotalToSync = data.data.total || 0;
+                if (data.success && data.data && data.data.type === 'users') {
+                  const progress = data.data;
 
-                  usersProgressDiv.style.display = 'block';
-                  usersProgressMessage.textContent = 'Initializing users sync...';
-                  usersProgressBar.style.width = '0%';
-                  usersProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
-                  usersProgressPercentage.textContent = '0%';
-                  usersProgressDetails.innerHTML = `
+                  if (progress.status === 'running') {
+                    usersProgressDiv.style.display = 'block';
+                    usersProgressMessage.textContent = progress.message || 'Syncing users...';
+
+                    const percentage = progress.total > 0
+                      ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
+                      : 0;
+
+                    usersProgressBar.style.width = percentage + '%';
+                    usersProgressPercentage.textContent = percentage + '%';
+
+                    const processed = formatNumber(progress.processed);
+                    const total = formatNumber(progress.total);
+                    const imported = formatNumber(progress.imported);
+
+                    usersProgressDetails.innerHTML = `
+              <strong>Processed:</strong> ${processed} / ${total} users<br>
+              <strong>Synced:</strong> ${imported} users<br>
+              <strong>Progress:</strong> ${percentage}% complete
+            `;
+
+                    if (usersProgressInterval) {
+                      clearTimeout(usersProgressInterval);
+                    }
+                    usersProgressInterval = setTimeout(updateUsersProgress, 800);
+                  } else if (progress.status === 'completed') {
+                    usersProgressDiv.style.display = 'block';
+                    usersProgressMessage.textContent = progress.message || '✅ Users sync completed successfully!';
+                    usersProgressBar.style.width = '100%';
+                    usersProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                    usersProgressPercentage.textContent = '100%';
+
+                    const processed = formatNumber(progress.processed);
+                    const imported = formatNumber(progress.imported);
+
+                    usersProgressDetails.innerHTML = `
+              <strong style="color: #46b450;">✓ Completed!</strong><br>
+              <strong>Total processed:</strong> ${processed} users<br>
+              <strong>Total synced:</strong> ${imported} users
+            `;
+
+                    if (usersSyncBtn) {
+                      usersSyncBtn.disabled = false;
+                      usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (usersCancelBtn) {
+                      usersCancelBtn.style.display = 'none';
+                    }
+                    if (usersDismissBtn) {
+                      usersDismissBtn.style.display = 'block';
+                    }
+
+                    if (usersProgressInterval) {
+                      clearTimeout(usersProgressInterval);
+                    }
+
+                    clearUsersProgress();
+
+                    setTimeout(() => {
+                      usersProgressDiv.style.display = 'none';
+                      if (usersDismissBtn) {
+                        usersDismissBtn.style.display = 'none';
+                      }
+                    }, 5000);
+                  } else if (progress.status === 'error') {
+                    usersProgressDiv.style.display = 'block';
+                    usersProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+                    usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
+
+                    usersProgressDetails.innerHTML = `
+              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} users
+            `;
+
+                    if (usersSyncBtn) {
+                      usersSyncBtn.disabled = false;
+                      usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (usersCancelBtn) {
+                      usersCancelBtn.style.display = 'none';
+                    }
+                    if (usersDismissBtn) {
+                      usersDismissBtn.style.display = 'block';
+                    }
+
+                    if (usersProgressInterval) {
+                      clearTimeout(usersProgressInterval);
+                    }
+
+                    clearUsersProgress();
+                  } else if (progress.status === 'cancelled') {
+                    usersProgressDiv.style.display = 'block';
+                    usersProgressMessage.textContent = '⚠️ Sync cancelled by user.';
+                    usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
+
+                    usersProgressDetails.innerHTML = `
+              <strong style="color: #d97706;">✗ Cancelled</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} users
+            `;
+
+                    if (usersSyncBtn) {
+                      usersSyncBtn.disabled = false;
+                      usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (usersCancelBtn) {
+                      usersCancelBtn.style.display = 'none';
+                    }
+                    if (usersDismissBtn) {
+                      usersDismissBtn.style.display = 'block';
+                    }
+
+                    if (usersProgressInterval) {
+                      clearTimeout(usersProgressInterval);
+                    }
+
+                    clearUsersProgress();
+                  } else {
+                    if (usersProgressInterval) {
+                      clearTimeout(usersProgressInterval);
+                    }
+                  }
+                } else {
+                  if (usersProgressInterval) {
+                    clearTimeout(usersProgressInterval);
+                  }
+                }
+              })
+              .catch(error => {
+                console.error('Error fetching users progress:', error);
+                if (usersProgressInterval) {
+                  clearTimeout(usersProgressInterval);
+                }
+              });
+          }
+
+          if (usersSyncBtn) {
+            usersSyncBtn.addEventListener('click', function (e) {
+              e.preventDefault();
+
+              usersIsCancelled = false;
+
+              fetch(ajaxurl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                  action: 'artly_get_users_count',
+                  _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
+                }),
+              })
+                .then(response => response.json())
+                .then(data => {
+                  if (data.success && data.data) {
+                    usersTotalToSync = data.data.total || 0;
+
+                    usersProgressDiv.style.display = 'block';
+                    usersProgressMessage.textContent = 'Initializing users sync...';
+                    usersProgressBar.style.width = '0%';
+                    usersProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+                    usersProgressPercentage.textContent = '0%';
+                    usersProgressDetails.innerHTML = `
               <strong>Total to sync:</strong> ${formatNumber(usersTotalToSync)} users<br>
               <strong>Status:</strong> Starting...
             `;
 
-                  usersSyncBtn.disabled = true;
-                  usersSyncBtn.textContent = 'Syncing...';
-                  if (usersCancelBtn) {
-                    usersCancelBtn.style.display = 'inline-block';
-                  }
+                    usersSyncBtn.disabled = true;
+                    usersSyncBtn.textContent = 'Syncing...';
+                    if (usersCancelBtn) {
+                      usersCancelBtn.style.display = 'inline-block';
+                    }
 
-                  fetch(ajaxurl, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                      action: 'artly_start_sync_users',
-                      _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
-                    }),
-                  })
-                    .then(response => response.json())
-                    .then(data => {
-                      if (usersIsCancelled) {
-                        usersProgressMessage.textContent = '⚠️ Sync was cancelled.';
-                        usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                        return;
-                      }
+                    fetch(ajaxurl, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                      },
+                      body: new URLSearchParams({
+                        action: 'artly_start_sync_users',
+                        _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
+                      }),
+                    })
+                      .then(response => response.json())
+                      .then(data => {
+                        if (usersIsCancelled) {
+                          usersProgressMessage.textContent = '⚠️ Sync was cancelled.';
+                          usersProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                          return;
+                        }
 
-                      if (data.success) {
-                        updateUsersProgress();
-                      } else {
-                        usersProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                        if (data.success) {
+                          updateUsersProgress();
+                        } else {
+                          usersProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                          usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                          usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+
+                          if (usersSyncBtn) {
+                            usersSyncBtn.disabled = false;
+                            usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
+                          }
+                          if (usersCancelBtn) {
+                            usersCancelBtn.style.display = 'none';
+                          }
+                        }
+                      })
+                      .catch(error => {
+                        console.error('Error during users sync:', error);
+                        usersProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
                         usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                        usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+                        usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
 
                         if (usersSyncBtn) {
                           usersSyncBtn.disabled = false;
@@ -2790,365 +2829,413 @@ function artly_reminder_bridge_render_admin_page(): void
                         if (usersCancelBtn) {
                           usersCancelBtn.style.display = 'none';
                         }
-                      }
-                    })
-                    .catch(error => {
-                      console.error('Error during users sync:', error);
-                      usersProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
-                      usersProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                      usersProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
-
-                      if (usersSyncBtn) {
-                        usersSyncBtn.disabled = false;
-                        usersSyncBtn.textContent = '<?php esc_html_e('Sync Users', 'artly-reminder-bridge'); ?>';
-                      }
-                      if (usersCancelBtn) {
-                        usersCancelBtn.style.display = 'none';
-                      }
-                    });
-                }
-              })
-              .catch(err => {
-                console.error('Error getting users count:', err);
-              });
-          });
-        }
-
-        if (usersCancelBtn) {
-          usersCancelBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            if (confirm('Are you sure you want to cancel the sync?')) {
-              usersIsCancelled = true;
-
-              fetch(ajaxurl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                  action: 'artly_cancel_sync',
-                  _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
-                }),
-              })
-                .then(() => {
-                  usersProgressMessage.textContent = '⚠️ Cancelling sync...';
-                  usersCancelBtn.disabled = true;
+                      });
+                  }
                 })
-                .catch(error => {
-                  console.error('Error cancelling sync:', error);
+                .catch(err => {
+                  console.error('Error getting users count:', err);
                 });
-            }
-          });
-        }
-
-        if (usersDismissBtn) {
-          usersDismissBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            clearUsersProgress();
-          });
-        }
-
-        updateUsersProgress();
-      })();
-
-      // Charges sync progress tracking
-      (function () {
-        const chargesSyncBtn = document.getElementById('artly-sync-charges-btn');
-        const chargesCancelBtn = document.getElementById('artly-cancel-charges-sync-btn');
-        const chargesProgressDiv = document.getElementById('artly-charges-sync-progress');
-        const chargesProgressMessage = document.getElementById('artly-charges-progress-message');
-        const chargesProgressBar = document.getElementById('artly-charges-progress-bar');
-        const chargesProgressPercentage = document.getElementById('artly-charges-progress-percentage');
-        const chargesProgressDetails = document.getElementById('artly-charges-progress-details');
-        const chargesDescription = document.getElementById('artly-charges-description');
-        const chargesDismissBtn = document.getElementById('artly-dismiss-charges-progress');
-        let chargesProgressInterval = null;
-        let chargesTotalToSync = 0;
-        let chargesIsCancelled = false;
-
-        function clearChargesProgress() {
-          fetch(ajaxurl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              action: 'artly_clear_sync_progress',
-              _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
-            }),
-          })
-            .then(() => {
-              chargesProgressDiv.style.display = 'none';
-              if (chargesSyncBtn) {
-                chargesSyncBtn.disabled = false;
-                chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-              }
-            })
-            .catch(error => {
-              console.error('Error clearing progress:', error);
             });
-        }
+          }
 
-        function formatNumber(num) {
-          return new Intl.NumberFormat().format(num);
-        }
+          if (usersCancelBtn) {
+            usersCancelBtn.addEventListener('click', function (e) {
+              e.preventDefault();
+              if (confirm('Are you sure you want to cancel the sync?')) {
+                usersIsCancelled = true;
 
-        function updateChargesProgress() {
-          fetch(ajaxurl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              action: 'artly_get_sync_progress',
-              _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
-            }),
-          })
-            .then(response => response.json())
-            .then(data => {
-              if (data.success && data.data && data.data.type === 'charges') {
-                const progress = data.data;
-
-                if (progress.status === 'running') {
-                  chargesProgressDiv.style.display = 'block';
-                  chargesProgressMessage.textContent = progress.message || 'Syncing charges...';
-
-                  const percentage = progress.total > 0
-                    ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
-                    : 0;
-
-                  chargesProgressBar.style.width = percentage + '%';
-                  chargesProgressPercentage.textContent = percentage + '%';
-
-                  const processed = formatNumber(progress.processed);
-                  const total = formatNumber(progress.total);
-                  const imported = formatNumber(progress.imported);
-
-                  chargesProgressDetails.innerHTML = `
-              <strong>Processed:</strong> ${processed} / ${total} orders<br>
-              <strong>Synced:</strong> ${imported} charges<br>
-              <strong>Progress:</strong> ${percentage}% complete
-            `;
-
-                  if (chargesProgressInterval) {
-                    clearTimeout(chargesProgressInterval);
-                  }
-                  chargesProgressInterval = setTimeout(updateChargesProgress, 800);
-                } else if (progress.status === 'completed') {
-                  chargesProgressDiv.style.display = 'block';
-                  chargesProgressMessage.textContent = progress.message || '✅ Sync completed successfully!';
-                  chargesProgressBar.style.width = '100%';
-                  chargesProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
-                  chargesProgressPercentage.textContent = '100%';
-
-                  const processed = formatNumber(progress.processed);
-                  const imported = formatNumber(progress.imported);
-
-                  chargesProgressDetails.innerHTML = `
-              <strong style="color: #46b450;">✓ Completed!</strong><br>
-              <strong>Total processed:</strong> ${processed} orders<br>
-              <strong>Total synced:</strong> ${imported} charges
-            `;
-
-                  if (chargesSyncBtn) {
-                    chargesSyncBtn.disabled = false;
-                    chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (chargesCancelBtn) {
-                    chargesCancelBtn.style.display = 'none';
-                  }
-                  if (chargesDismissBtn) {
-                    chargesDismissBtn.style.display = 'block';
-                  }
-
-                  if (chargesProgressInterval) {
-                    clearTimeout(chargesProgressInterval);
-                  }
-
-                  // Clear progress on backend
-                  clearChargesProgress();
-
-                  // Auto-hide after 5 seconds (instead of reloading)
-                  setTimeout(() => {
-                    chargesProgressDiv.style.display = 'none';
-                    if (chargesDismissBtn) {
-                      chargesDismissBtn.style.display = 'none';
-                    }
-                  }, 5000);
-                } else if (progress.status === 'error') {
-                  chargesProgressDiv.style.display = 'block';
-                  chargesProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
-                  chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
-
-                  chargesProgressDetails.innerHTML = `
-              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} orders
-            `;
-
-                  if (chargesSyncBtn) {
-                    chargesSyncBtn.disabled = false;
-                    chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (chargesCancelBtn) {
-                    chargesCancelBtn.style.display = 'none';
-                  }
-                  if (chargesDismissBtn) {
-                    chargesDismissBtn.style.display = 'block';
-                  }
-
-                  if (chargesProgressInterval) {
-                    clearTimeout(chargesProgressInterval);
-                  }
-
-                  // Clear progress on backend
-                  clearChargesProgress();
-                } else if (progress.status === 'cancelled') {
-                  chargesProgressDiv.style.display = 'block';
-                  chargesProgressMessage.textContent = '⚠️ Sync cancelled by user.';
-                  chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-
-                  const processed = formatNumber(progress.processed || 0);
-                  const total = formatNumber(progress.total || 0);
-
-                  chargesProgressDetails.innerHTML = `
-              <strong style="color: #d97706;">✗ Cancelled</strong><br>
-              <strong>Processed:</strong> ${processed} / ${total} orders
-            `;
-
-                  if (chargesSyncBtn) {
-                    chargesSyncBtn.disabled = false;
-                    chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                  }
-                  if (chargesCancelBtn) {
-                    chargesCancelBtn.style.display = 'none';
-                  }
-                  if (chargesDismissBtn) {
-                    chargesDismissBtn.style.display = 'block';
-                  }
-
-                  if (chargesProgressInterval) {
-                    clearTimeout(chargesProgressInterval);
-                  }
-
-                  // Clear progress on backend
-                  clearChargesProgress();
-                }
-              } else if (data.success && data.data && (data.data.status === 'completed' || data.data.status === 'error' || data.data.status === 'cancelled')) {
-                // Show completed/error/cancelled status from previous sync
-                const progress = data.data;
-                if (progress.type === 'charges') {
-                  if (progress.status === 'completed') {
-                    chargesProgressDiv.style.display = 'block';
-                    chargesProgressMessage.textContent = progress.message || '✅ Sync completed successfully!';
-                    chargesProgressBar.style.width = '100%';
-                    chargesProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
-                    chargesProgressPercentage.textContent = '100%';
-                    const processed = formatNumber(progress.processed || 0);
-                    const imported = formatNumber(progress.imported || 0);
-                    chargesProgressDetails.innerHTML = `
-                <strong style="color: #46b450;">✓ Completed!</strong><br>
-                <strong>Total processed:</strong> ${processed} orders<br>
-                <strong>Total synced:</strong> ${imported} charges
-              `;
-                    if (chargesDismissBtn) {
-                      chargesDismissBtn.style.display = 'block';
-                    }
-                  } else if (progress.status === 'error') {
-                    chargesProgressDiv.style.display = 'block';
-                    chargesProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
-                    chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                    const processed = formatNumber(progress.processed || 0);
-                    const total = formatNumber(progress.total || 0);
-                    chargesProgressDetails.innerHTML = `
-                <strong style="color: #dc3232;">✗ Error occurred</strong><br>
-                <strong>Processed:</strong> ${processed} / ${total} orders
-              `;
-                    if (chargesDismissBtn) {
-                      chargesDismissBtn.style.display = 'block';
-                    }
-                  } else if (progress.status === 'cancelled') {
-                    chargesProgressDiv.style.display = 'block';
-                    chargesProgressMessage.textContent = '⚠️ Sync cancelled by user.';
-                    chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                    const processed = formatNumber(progress.processed || 0);
-                    const total = formatNumber(progress.total || 0);
-                    chargesProgressDetails.innerHTML = `
-                <strong style="color: #d97706;">✗ Cancelled</strong><br>
-                <strong>Processed:</strong> ${processed} / ${total} orders
-              `;
-                    if (chargesDismissBtn) {
-                      chargesDismissBtn.style.display = 'block';
-                    }
-                  }
-                  if (chargesSyncBtn) {
-                    chargesSyncBtn.disabled = false;
-                    chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                  }
-                }
-              } else {
-                // No active charges sync
-                if (chargesProgressInterval) {
-                  clearTimeout(chargesProgressInterval);
-                }
-              }
-            })
-            .catch(error => {
-              console.error('Error fetching charges progress:', error);
-              if (chargesProgressInterval) {
-                clearTimeout(chargesProgressInterval);
+                fetch(ajaxurl, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                  },
+                  body: new URLSearchParams({
+                    action: 'artly_cancel_sync',
+                    _wpnonce: '<?php echo wp_create_nonce('artly_sync_users'); ?>',
+                  }),
+                })
+                  .then(() => {
+                    usersProgressMessage.textContent = '⚠️ Cancelling sync...';
+                    usersCancelBtn.disabled = true;
+                  })
+                  .catch(error => {
+                    console.error('Error cancelling sync:', error);
+                  });
               }
             });
-        }
+          }
 
-        if (chargesSyncBtn) {
-          chargesSyncBtn.addEventListener('click', function (e) {
-            e.preventDefault();
+          if (usersDismissBtn) {
+            usersDismissBtn.addEventListener('click', function (e) {
+              e.preventDefault();
+              clearUsersProgress();
+            });
+          }
 
-            chargesIsCancelled = false;
+          updateUsersProgress();
+        })();
 
-            // Get total count first
+        // Charges sync progress tracking
+        (function () {
+          const chargesSyncBtn = document.getElementById('artly-sync-charges-btn');
+          const chargesCancelBtn = document.getElementById('artly-cancel-charges-sync-btn');
+          const chargesProgressDiv = document.getElementById('artly-charges-sync-progress');
+          const chargesProgressMessage = document.getElementById('artly-charges-progress-message');
+          const chargesProgressBar = document.getElementById('artly-charges-progress-bar');
+          const chargesProgressPercentage = document.getElementById('artly-charges-progress-percentage');
+          const chargesProgressDetails = document.getElementById('artly-charges-progress-details');
+          const chargesDescription = document.getElementById('artly-charges-description');
+          const chargesDismissBtn = document.getElementById('artly-dismiss-charges-progress');
+          let chargesProgressInterval = null;
+          let chargesTotalToSync = 0;
+          let chargesIsCancelled = false;
+
+          function clearChargesProgress() {
             fetch(ajaxurl, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
               },
               body: new URLSearchParams({
-                action: 'artly_get_charges_count',
-                _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
+                action: 'artly_clear_sync_progress',
+                _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
+              }),
+            })
+              .then(() => {
+                chargesProgressDiv.style.display = 'none';
+                if (chargesSyncBtn) {
+                  chargesSyncBtn.disabled = false;
+                  chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                }
+              })
+              .catch(error => {
+                console.error('Error clearing progress:', error);
+              });
+          }
+
+          function formatNumber(num) {
+            return new Intl.NumberFormat().format(num);
+          }
+
+          function updateChargesProgress() {
+            fetch(ajaxurl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams({
+                action: 'artly_get_sync_progress',
+                _wpnonce: '<?php echo wp_create_nonce('artly_sync_progress'); ?>',
               }),
             })
               .then(response => response.json())
               .then(data => {
-                if (data.success && data.data) {
-                  chargesTotalToSync = data.data.total;
+                if (data.success && data.data && data.data.type === 'charges') {
+                  const progress = data.data;
 
-                  // Update description
-                  if (chargesDescription) {
-                    chargesDescription.innerHTML = '<?php esc_html_e('Sync WooCommerce orders/charges to the Reminder Engine.', 'artly-reminder-bridge'); ?> (' + formatNumber(chargesTotalToSync) + ' orders)';
+                  if (progress.status === 'running') {
+                    chargesProgressDiv.style.display = 'block';
+                    chargesProgressMessage.textContent = progress.message || 'Syncing charges...';
+
+                    const percentage = progress.total > 0
+                      ? Math.min(Math.round((progress.processed / progress.total) * 100), 100)
+                      : 0;
+
+                    chargesProgressBar.style.width = percentage + '%';
+                    chargesProgressPercentage.textContent = percentage + '%';
+
+                    const processed = formatNumber(progress.processed);
+                    const total = formatNumber(progress.total);
+                    const imported = formatNumber(progress.imported);
+
+                    chargesProgressDetails.innerHTML = `
+              <strong>Processed:</strong> ${processed} / ${total} orders<br>
+              <strong>Synced:</strong> ${imported} charges<br>
+              <strong>Progress:</strong> ${percentage}% complete
+            `;
+
+                    if (chargesProgressInterval) {
+                      clearTimeout(chargesProgressInterval);
+                    }
+                    chargesProgressInterval = setTimeout(updateChargesProgress, 800);
+                  } else if (progress.status === 'completed') {
+                    chargesProgressDiv.style.display = 'block';
+                    chargesProgressMessage.textContent = progress.message || '✅ Sync completed successfully!';
+                    chargesProgressBar.style.width = '100%';
+                    chargesProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                    chargesProgressPercentage.textContent = '100%';
+
+                    const processed = formatNumber(progress.processed);
+                    const imported = formatNumber(progress.imported);
+
+                    chargesProgressDetails.innerHTML = `
+              <strong style="color: #46b450;">✓ Completed!</strong><br>
+              <strong>Total processed:</strong> ${processed} orders<br>
+              <strong>Total synced:</strong> ${imported} charges
+            `;
+
+                    if (chargesSyncBtn) {
+                      chargesSyncBtn.disabled = false;
+                      chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (chargesCancelBtn) {
+                      chargesCancelBtn.style.display = 'none';
+                    }
+                    if (chargesDismissBtn) {
+                      chargesDismissBtn.style.display = 'block';
+                    }
+
+                    if (chargesProgressInterval) {
+                      clearTimeout(chargesProgressInterval);
+                    }
+
+                    // Clear progress on backend
+                    clearChargesProgress();
+
+                    // Auto-hide after 5 seconds (instead of reloading)
+                    setTimeout(() => {
+                      chargesProgressDiv.style.display = 'none';
+                      if (chargesDismissBtn) {
+                        chargesDismissBtn.style.display = 'none';
+                      }
+                    }, 5000);
+                  } else if (progress.status === 'error') {
+                    chargesProgressDiv.style.display = 'block';
+                    chargesProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+                    chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
+
+                    chargesProgressDetails.innerHTML = `
+              <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} orders
+            `;
+
+                    if (chargesSyncBtn) {
+                      chargesSyncBtn.disabled = false;
+                      chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (chargesCancelBtn) {
+                      chargesCancelBtn.style.display = 'none';
+                    }
+                    if (chargesDismissBtn) {
+                      chargesDismissBtn.style.display = 'block';
+                    }
+
+                    if (chargesProgressInterval) {
+                      clearTimeout(chargesProgressInterval);
+                    }
+
+                    // Clear progress on backend
+                    clearChargesProgress();
+                  } else if (progress.status === 'cancelled') {
+                    chargesProgressDiv.style.display = 'block';
+                    chargesProgressMessage.textContent = '⚠️ Sync cancelled by user.';
+                    chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+
+                    const processed = formatNumber(progress.processed || 0);
+                    const total = formatNumber(progress.total || 0);
+
+                    chargesProgressDetails.innerHTML = `
+              <strong style="color: #d97706;">✗ Cancelled</strong><br>
+              <strong>Processed:</strong> ${processed} / ${total} orders
+            `;
+
+                    if (chargesSyncBtn) {
+                      chargesSyncBtn.disabled = false;
+                      chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                    }
+                    if (chargesCancelBtn) {
+                      chargesCancelBtn.style.display = 'none';
+                    }
+                    if (chargesDismissBtn) {
+                      chargesDismissBtn.style.display = 'block';
+                    }
+
+                    if (chargesProgressInterval) {
+                      clearTimeout(chargesProgressInterval);
+                    }
+
+                    // Clear progress on backend
+                    clearChargesProgress();
                   }
+                } else if (data.success && data.data && (data.data.status === 'completed' || data.data.status === 'error' || data.data.status === 'cancelled')) {
+                  // Show completed/error/cancelled status from previous sync
+                  const progress = data.data;
+                  if (progress.type === 'charges') {
+                    if (progress.status === 'completed') {
+                      chargesProgressDiv.style.display = 'block';
+                      chargesProgressMessage.textContent = progress.message || '✅ Sync completed successfully!';
+                      chargesProgressBar.style.width = '100%';
+                      chargesProgressBar.style.background = 'linear-gradient(90deg, #46b450 0%, #2e7d32 100%)';
+                      chargesProgressPercentage.textContent = '100%';
+                      const processed = formatNumber(progress.processed || 0);
+                      const imported = formatNumber(progress.imported || 0);
+                      chargesProgressDetails.innerHTML = `
+                <strong style="color: #46b450;">✓ Completed!</strong><br>
+                <strong>Total processed:</strong> ${processed} orders<br>
+                <strong>Total synced:</strong> ${imported} charges
+              `;
+                      if (chargesDismissBtn) {
+                        chargesDismissBtn.style.display = 'block';
+                      }
+                    } else if (progress.status === 'error') {
+                      chargesProgressDiv.style.display = 'block';
+                      chargesProgressMessage.textContent = '❌ ' + (progress.message || 'Sync failed!');
+                      chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                      const processed = formatNumber(progress.processed || 0);
+                      const total = formatNumber(progress.total || 0);
+                      chargesProgressDetails.innerHTML = `
+                <strong style="color: #dc3232;">✗ Error occurred</strong><br>
+                <strong>Processed:</strong> ${processed} / ${total} orders
+              `;
+                      if (chargesDismissBtn) {
+                        chargesDismissBtn.style.display = 'block';
+                      }
+                    } else if (progress.status === 'cancelled') {
+                      chargesProgressDiv.style.display = 'block';
+                      chargesProgressMessage.textContent = '⚠️ Sync cancelled by user.';
+                      chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                      const processed = formatNumber(progress.processed || 0);
+                      const total = formatNumber(progress.total || 0);
+                      chargesProgressDetails.innerHTML = `
+                <strong style="color: #d97706;">✗ Cancelled</strong><br>
+                <strong>Processed:</strong> ${processed} / ${total} orders
+              `;
+                      if (chargesDismissBtn) {
+                        chargesDismissBtn.style.display = 'block';
+                      }
+                    }
+                    if (chargesSyncBtn) {
+                      chargesSyncBtn.disabled = false;
+                      chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                    }
+                  }
+                } else {
+                  // No active charges sync
+                  if (chargesProgressInterval) {
+                    clearTimeout(chargesProgressInterval);
+                  }
+                }
+              })
+              .catch(error => {
+                console.error('Error fetching charges progress:', error);
+                if (chargesProgressInterval) {
+                  clearTimeout(chargesProgressInterval);
+                }
+              });
+          }
 
-                  // Show progress immediately
-                  chargesProgressDiv.style.display = 'block';
-                  chargesProgressMessage.textContent = 'Initializing charges sync...';
-                  chargesProgressBar.style.width = '0%';
-                  chargesProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
-                  chargesProgressPercentage.textContent = '0%';
-                  chargesProgressDetails.innerHTML = `
+          if (chargesSyncBtn) {
+            chargesSyncBtn.addEventListener('click', function (e) {
+              e.preventDefault();
+
+              chargesIsCancelled = false;
+
+              // Get total count first
+              fetch(ajaxurl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                  action: 'artly_get_charges_count',
+                  _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
+                }),
+              })
+                .then(response => response.json())
+                .then(data => {
+                  if (data.success && data.data) {
+                    chargesTotalToSync = data.data.total;
+
+                    // Update description
+                    if (chargesDescription) {
+                      chargesDescription.innerHTML = '<?php esc_html_e('Sync WooCommerce orders/charges to the Reminder Engine.', 'artly-reminder-bridge'); ?> (' + formatNumber(chargesTotalToSync) + ' orders)';
+                    }
+
+                    // Show progress immediately
+                    chargesProgressDiv.style.display = 'block';
+                    chargesProgressMessage.textContent = 'Initializing charges sync...';
+                    chargesProgressBar.style.width = '0%';
+                    chargesProgressBar.style.background = 'linear-gradient(90deg, #2271b1 0%, #135e96 100%)';
+                    chargesProgressPercentage.textContent = '0%';
+                    chargesProgressDetails.innerHTML = `
               <strong>Total to sync:</strong> ${formatNumber(chargesTotalToSync)} orders<br>
               <strong>Status:</strong> Starting...
             `;
 
-                  // Disable sync button and show cancel button
+                    // Disable sync button and show cancel button
+                    chargesSyncBtn.disabled = true;
+                    chargesSyncBtn.textContent = 'Syncing...';
+                    if (chargesCancelBtn) {
+                      chargesCancelBtn.style.display = 'inline-block';
+                    }
+
+                    // Start the sync via AJAX
+                    fetch(ajaxurl, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                      },
+                      body: new URLSearchParams({
+                        action: 'artly_start_sync_charges',
+                        _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
+                      }),
+                    })
+                      .then(response => response.json())
+                      .then(data => {
+                        if (chargesIsCancelled) {
+                          chargesProgressMessage.textContent = '⚠️ Sync was cancelled.';
+                          chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                          return;
+                        }
+
+                        if (data.success) {
+                          // Start polling for progress
+                          updateChargesProgress();
+                        } else {
+                          chargesProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                          chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                          chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
+
+                          if (chargesSyncBtn) {
+                            chargesSyncBtn.disabled = false;
+                            chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                          }
+                          if (chargesCancelBtn) {
+                            chargesCancelBtn.style.display = 'none';
+                          }
+                        }
+                      })
+                      .catch(error => {
+                        console.error('Error during charges sync:', error);
+                        chargesProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
+                        chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
+                        chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
+
+                        if (chargesSyncBtn) {
+                          chargesSyncBtn.disabled = false;
+                          chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
+                        }
+                        if (chargesCancelBtn) {
+                          chargesCancelBtn.style.display = 'none';
+                        }
+                      });
+                  }
+                })
+                .catch(error => {
+                  console.error('Error getting charges count:', error);
+                  // Still try to start sync
+                  chargesProgressDiv.style.display = 'block';
+                  chargesProgressMessage.textContent = 'Starting sync...';
                   chargesSyncBtn.disabled = true;
                   chargesSyncBtn.textContent = 'Syncing...';
                   if (chargesCancelBtn) {
                     chargesCancelBtn.style.display = 'inline-block';
                   }
+                  chargesIsCancelled = false;
 
-                  // Start the sync via AJAX
                   fetch(ajaxurl, {
                     method: 'POST',
                     headers: {
@@ -3168,7 +3255,6 @@ function artly_reminder_bridge_render_admin_page(): void
                       }
 
                       if (data.success) {
-                        // Start polling for progress
                         updateChargesProgress();
                       } else {
                         chargesProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
@@ -3198,121 +3284,59 @@ function artly_reminder_bridge_render_admin_page(): void
                         chargesCancelBtn.style.display = 'none';
                       }
                     });
-                }
-              })
-              .catch(error => {
-                console.error('Error getting charges count:', error);
-                // Still try to start sync
-                chargesProgressDiv.style.display = 'block';
-                chargesProgressMessage.textContent = 'Starting sync...';
-                chargesSyncBtn.disabled = true;
-                chargesSyncBtn.textContent = 'Syncing...';
-                if (chargesCancelBtn) {
-                  chargesCancelBtn.style.display = 'inline-block';
-                }
-                chargesIsCancelled = false;
+                });
+            });
 
-                fetch(ajaxurl, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                  },
-                  body: new URLSearchParams({
-                    action: 'artly_start_sync_charges',
-                    _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
-                  }),
-                })
-                  .then(response => response.json())
-                  .then(data => {
-                    if (chargesIsCancelled) {
-                      chargesProgressMessage.textContent = '⚠️ Sync was cancelled.';
-                      chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                      return;
-                    }
+            if (chargesCancelBtn) {
+              chargesCancelBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (confirm('Are you sure you want to cancel the sync?')) {
+                  chargesIsCancelled = true;
+                  chargesProgressMessage.textContent = 'Cancelling sync...';
+                  chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
+                  chargesSyncBtn.disabled = true;
+                  chargesCancelBtn.disabled = true;
 
-                    if (data.success) {
-                      updateChargesProgress();
-                    } else {
-                      chargesProgressMessage.textContent = '❌ ' + (data.data?.message || 'Sync failed');
+                  fetch(ajaxurl, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                      action: 'artly_cancel_sync',
+                      _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
+                    }),
+                  })
+                    .then(response => response.json())
+                    .then(data => {
+                      console.log('Cancel response:', data);
+                    })
+                    .catch(error => {
+                      console.error('Error sending cancel request:', error);
+                      chargesProgressMessage.textContent = '❌ Error requesting cancellation.';
                       chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                      chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${data.data?.message || 'Unknown error'}`;
-
-                      if (chargesSyncBtn) {
-                        chargesSyncBtn.disabled = false;
-                        chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                      }
-                      if (chargesCancelBtn) {
-                        chargesCancelBtn.style.display = 'none';
-                      }
-                    }
-                  })
-                  .catch(error => {
-                    console.error('Error during charges sync:', error);
-                    chargesProgressMessage.textContent = '❌ An unexpected error occurred during sync.';
-                    chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                    chargesProgressDetails.innerHTML = `<strong style="color: #dc3232;">✗ Error occurred</strong><br><strong>Message:</strong> ${error.message || 'Network error'}`;
-
-                    if (chargesSyncBtn) {
-                      chargesSyncBtn.disabled = false;
-                      chargesSyncBtn.textContent = '<?php esc_html_e('Sync Charges', 'artly-reminder-bridge'); ?>';
-                    }
-                    if (chargesCancelBtn) {
-                      chargesCancelBtn.style.display = 'none';
-                    }
-                  });
+                    })
+                    .finally(() => {
+                      chargesCancelBtn.disabled = false;
+                    });
+                }
               });
-          });
+            }
 
-          if (chargesCancelBtn) {
-            chargesCancelBtn.addEventListener('click', function (e) {
-              e.preventDefault();
-              if (confirm('Are you sure you want to cancel the sync?')) {
-                chargesIsCancelled = true;
-                chargesProgressMessage.textContent = 'Cancelling sync...';
-                chargesProgressBar.style.background = 'linear-gradient(90deg, #f0b849 0%, #d97706 100%)';
-                chargesSyncBtn.disabled = true;
-                chargesCancelBtn.disabled = true;
+            // Dismiss button handler
+            if (chargesDismissBtn) {
+              chargesDismissBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                clearChargesProgress();
+              });
+            }
 
-                fetch(ajaxurl, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                  },
-                  body: new URLSearchParams({
-                    action: 'artly_cancel_sync',
-                    _wpnonce: '<?php echo wp_create_nonce('artly_sync_charges'); ?>',
-                  }),
-                })
-                  .then(response => response.json())
-                  .then(data => {
-                    console.log('Cancel response:', data);
-                  })
-                  .catch(error => {
-                    console.error('Error sending cancel request:', error);
-                    chargesProgressMessage.textContent = '❌ Error requesting cancellation.';
-                    chargesProgressBar.style.background = 'linear-gradient(90deg, #dc3232 0%, #b32d2e 100%)';
-                  })
-                  .finally(() => {
-                    chargesCancelBtn.disabled = false;
-                  });
-              }
-            });
+            // Initial check for ongoing sync when page loads
+            updateChargesProgress();
           }
-
-          // Dismiss button handler
-          if (chargesDismissBtn) {
-            chargesDismissBtn.addEventListener('click', function (e) {
-              e.preventDefault();
-              clearChargesProgress();
-            });
-          }
-
-          // Initial check for ongoing sync when page loads
-          updateChargesProgress();
-        }
-      })();
-    </script>
-    <?php
+        })();
+      </script>
+      <?php
 }
 
 /**
