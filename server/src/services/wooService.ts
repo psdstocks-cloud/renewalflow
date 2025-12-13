@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { getSettings } from './settingsService';
+import { getUnmaskedSettings } from './settingsService';
 import { addDays } from 'date-fns';
 
 interface WooOrder {
@@ -15,7 +15,7 @@ interface WooOrder {
 }
 
 export async function syncWooOrders() {
-  const { wooSettings } = await getSettings();
+  const { wooSettings } = await getUnmaskedSettings();
   if (!wooSettings) {
     throw new Error('WooCommerce settings are missing');
   }

@@ -141,3 +141,41 @@ export async function updateSettings(payload: Partial<SettingsResponse>) {
   }
   return getSettings();
 }
+
+/**
+ * INTERNAL USE ONLY: Get settings with full unmasked credentials.
+ * NEVER expose this result to the frontend API.
+ */
+export async function getUnmaskedSettings(): Promise<SettingsResponse> {
+  const [reminderConfig, emailTemplate, adminWhatsApp, wooSettings] = await Promise.all([
+    getSetting<ReminderConfig>(REMINDER_KEY),
+    getSetting<EmailTemplateConfig>(EMAIL_TEMPLATE_KEY),
+    getSetting<WhatsAppConfig>(WHATSAPP_KEY),
+    getSetting<WooSettings>(WOO_KEY)
+  ]);
+
+  let processedWooSettings = null;
+  if (wooSettings) {
+    try {
+      // Decrypt for internal use (no masking)
+      const keyParams = decrypt(wooSettings.consumerKey);
+      const secretParams = decrypt(wooSettings.consumerSecret);
+
+      processedWooSettings = {
+        ...wooSettings,
+        consumerKey: keyParams || wooSettings.consumerKey,
+        consumerSecret: secretParams || wooSettings.consumerSecret,
+      };
+    } catch (e) {
+      console.error("Error decrypting settings", e);
+      processedWooSettings = wooSettings;
+    }
+  }
+
+  return {
+    reminderConfig: reminderSchema.parse(reminderConfig ?? {}),
+    emailTemplate: emailTemplateSchema.parse(emailTemplate ?? {}),
+    adminWhatsApp: whatsappSchema.parse(adminWhatsApp ?? { phoneNumber: '' }),
+    wooSettings: processedWooSettings ? wooSchema.parse(processedWooSettings) : null
+  };
+}
