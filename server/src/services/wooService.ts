@@ -29,11 +29,13 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
   const headers = { Authorization: `Basic ${auth}` };
 
-  const limit = 50;
+  const limit = 10;
   let created = 0;
   let updated = 0;
 
+  console.log(`[Sync] Fetching page ${page} with limit ${limit}`);
   const response = await fetch(`${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`, { headers });
+  console.log(`[Sync] Response status: ${response.status}`);
 
   if (!response.ok) {
     if (response.status === 404) {
