@@ -29,7 +29,8 @@ export async function syncWooOrders() {
   let totalProcessed = 0;
 
   while (true) {
-    const response = await fetch(`${baseUrl}?page=${page}&limit=${limit}`, { headers });
+    const response = await fetch(`${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`, { headers });
+
 
     if (!response.ok) {
       // Fallback: If 404, it means the user hasn't updated the plugin yet. Throw helpful error.
