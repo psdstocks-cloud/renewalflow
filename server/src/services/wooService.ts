@@ -167,11 +167,11 @@ export async function fetchUserPointsHistory(email: string, workspaceId?: string
   }
 
   // Use the custom endpoint we added to the plugin
-  const baseUrl = `${wooSettings.url.replace(/\/$/, '')} /wp-json/artly / v1 / user - history`;
-  const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret} `).toString('base64');
-  const headers = { Authorization: `Basic ${auth} ` };
+  const baseUrl = `${wooSettings.url.replace(/\/$/, '')}/wp-json/artly/v1/user-history`;
+  const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
+  const headers = { Authorization: `Basic ${auth}` };
 
-  const url = `${baseUrl}?email = ${encodeURIComponent(email)}& secret=renewalflow_secure_sync_2024`;
+  const url = `${baseUrl}?email=${encodeURIComponent(email)}&secret=renewalflow_secure_sync_2024`;
 
   try {
     const response = await fetch(url, { headers });
