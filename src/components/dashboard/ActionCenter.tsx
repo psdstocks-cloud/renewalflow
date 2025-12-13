@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
 import { ReminderTask } from '@/src/types';
 import { useLanguage } from '@/src/context/LanguageContext';
+import { Pagination } from '@/src/components/ui/Pagination';
 
 interface ActionCenterProps {
     tasks: ReminderTask[];
@@ -12,6 +13,8 @@ interface ActionCenterProps {
     isBatchSending: boolean;
 }
 
+// ... (ActionCenterProps)
+
 export const ActionCenter: React.FC<ActionCenterProps> = ({
     tasks,
     onSend,
@@ -20,6 +23,41 @@ export const ActionCenter: React.FC<ActionCenterProps> = ({
     isBatchSending
 }) => {
     const { t } = useLanguage();
+    const [page, setPage] = useState(1);
+    const ITEMS_PER_PAGE = 10;
+
+    const totalPages = Math.ceil(tasks.length / ITEMS_PER_PAGE);
+
+    // Sort tasks: Expired first (Recent -> Old), then Upcoming (Soon -> Later)
+    const sortedTasks = [...tasks].sort((a, b) => {
+        const dateA = new Date(a.subscriber?.endDate || 0).getTime();
+        const dateB = new Date(b.subscriber?.endDate || 0).getTime();
+
+        const isExpiredA = a.daysUntilExpiry < 0;
+        const isExpiredB = b.daysUntilExpiry < 0;
+
+        // 1. Expired users first
+        if (isExpiredA && !isExpiredB) return -1;
+        if (!isExpiredA && isExpiredB) return 1;
+
+        // 2. If both expired, sort by most recent date first (DESC)
+        if (isExpiredA && isExpiredB) {
+            return dateB - dateA;
+        }
+
+        // 3. If both upcoming, sort by soonest date first (ASC)
+        return dateA - dateB;
+    });
+
+    const paginatedTasks = sortedTasks.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
+
+    // Reset page if data changes significantly (e.g. filtered to empty) 
+    // or keep it if reasonable. Let's safe guard.
+    useEffect(() => {
+        if (page > totalPages && totalPages > 0) {
+            setPage(1);
+        }
+    }, [tasks.length, totalPages, page]);
 
     if (tasks.length === 0) {
         return (
@@ -51,7 +89,7 @@ export const ActionCenter: React.FC<ActionCenterProps> = ({
             </div>
 
             <div className="grid gap-4">
-                {tasks.map((task) => (
+                {paginatedTasks.map((task) => (
                     <Card key={task.id} className="group hover:border-violet-500/30 transition-all" noPadding>
                         <div className="p-5 flex items-center justify-between">
                             <div className="flex items-center gap-4">
@@ -60,6 +98,7 @@ export const ActionCenter: React.FC<ActionCenterProps> = ({
                                 </div>
                                 <div>
                                     <h4 className="font-bold text-white text-lg">{task.subscriber?.name || 'Unknown Subscriber'}</h4>
+                                    <div className="text-sm text-zinc-400 mb-1">{task.subscriber?.email}</div>
                                     <div className="flex items-center gap-3 text-sm mt-1">
                                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${task.daysUntilExpiry < 0 ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
                                             {Math.abs(task.daysUntilExpiry)} Days {task.daysUntilExpiry < 0 ? 'Overdue' : 'Left'}
@@ -91,6 +130,12 @@ export const ActionCenter: React.FC<ActionCenterProps> = ({
                     </Card>
                 ))}
             </div>
+
+            <Pagination
+                currentPage={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+            />
         </div>
     );
 };
