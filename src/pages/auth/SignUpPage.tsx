@@ -21,14 +21,11 @@ export const SignUpPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const { error } = await signUp({ email, password });
-      if (error) {
-        setError(error.message);
-      } else {
-        navigate('/auth/email-confirm');
-      }
-    } catch (err) {
-      setError('An unexpected error occurred.');
+      await signUp({ email, password });
+      navigate('/auth/email-confirm');
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }

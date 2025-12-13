@@ -21,14 +21,11 @@ export const SignInPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const { error } = await signIn({ email, password });
-      if (error) {
-        setError(error.message);
-      } else {
-        navigate('/dashboard');
-      }
-    } catch (err) {
-      setError('An unexpected error occurred.');
+      await signIn({ email, password });
+      navigate('/dashboard');
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'An unexpected error occurred.');
     } finally {
       setIsLoading(false);
     }
