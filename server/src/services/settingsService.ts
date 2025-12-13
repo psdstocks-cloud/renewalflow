@@ -34,7 +34,8 @@ const wooSchema = z.object({
   }).pipe(z.string().url()),
   consumerKey: z.string(),
   consumerSecret: z.string(),
-  pointsPerCurrency: z.number().positive()
+  pointsPerCurrency: z.number().positive(),
+  lastSync: z.string().optional()
 });
 
 // Get default workspace ID (for now, use the first workspace)
