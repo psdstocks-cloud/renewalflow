@@ -7,12 +7,14 @@ import { useLanguage } from '@/src/context/LanguageContext';
 
 // Components
 import { DashboardLayout } from '@/src/components/layout/DashboardLayout';
+import { BriefingHeader } from '@/src/components/dashboard/BriefingHeader';
 import { StatCard } from '@/src/components/dashboard/StatCard';
 import { ActionCenter } from '@/src/components/dashboard/ActionCenter';
 import { SubscribersView } from '@/src/components/dashboard/SubscribersView';
 import { SettingsView } from '@/src/components/dashboard/SettingsView';
 import { IntegrationsView } from '@/src/components/dashboard/IntegrationsView';
 import { EditSubscriberModal } from '@/src/components/dashboard/EditSubscriberModal';
+import { PointsFlowChart, RetentionForecastChart } from '@/src/components/dashboard/ChartComponents';
 
 // Types
 import {
@@ -38,7 +40,7 @@ const Dashboard: React.FC = () => {
   const [searchParams] = useSearchParams();
 
   // --- State ---
-  const [activeTab, setActiveTab] = useState('action');
+  const [activeTab, setActiveTab] = useState('overview'); // Default to overview to show charts
 
   // Data State
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
@@ -46,6 +48,10 @@ const Dashboard: React.FC = () => {
   const [tasks, setTasks] = useState<ReminderTask[]>([]);
   const [logs, setLogs] = useState<EmailLog[]>([]);
   const [connections, setConnections] = useState<WebsiteConnection[]>([]);
+
+  // Reports State
+  const [retentionData, setRetentionData] = useState<any>(null);
+  const [pointsFlowData, setPointsFlowData] = useState<any[]>([]);
 
   // Settings State
   const [reminderConfig, setReminderConfig] = useState(defaultReminderConfig);
@@ -64,6 +70,10 @@ const Dashboard: React.FC = () => {
   const [subPage, setSubPage] = useState(1);
   const [subTotal, setSubTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  // New state for filters
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [expiringFilter, setExpiringFilter] = useState<number | undefined>(undefined);
+
   const [editingSubscriber, setEditingSubscriber] = useState<Subscriber | null>(null);
 
   // --- Effects ---
@@ -73,24 +83,22 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'subscribers') {
-      loadSubscribers(subPage, searchQuery);
+      loadSubscribers(subPage, searchQuery, statusFilter, expiringFilter);
     }
-  }, [subPage, searchQuery, activeTab]);
+  }, [subPage, searchQuery, activeTab, statusFilter, expiringFilter]);
 
-  useEffect(() => {
-    if (activeTab === 'integrations') {
-      loadConnections();
-    }
-  }, [activeTab]);
+  // ... (keep existing effects)
 
   // --- Data Loading ---
   const loadInitialData = async () => {
     setIsLoading(true);
     try {
-      const [settingsRes, statsRes, tasksRes] = await Promise.all([
+      const [settingsRes, statsRes, tasksRes, retentionRes, pointsRes] = await Promise.all([
         apiFetch<AppSettings>('/api/settings'),
         apiFetch<SubscriberStats>('/api/subscribers/stats'),
         apiFetch<ReminderTask[]>('/api/reminders/tasks'),
+        apiFetch<any>('/api/reports/retention'),
+        apiFetch<any[]>('/api/reports/points-flow')
       ]);
 
       setReminderConfig(settingsRes.reminderConfig || defaultReminderConfig);
@@ -100,6 +108,8 @@ const Dashboard: React.FC = () => {
 
       setStats(statsRes);
       setTasks(tasksRes);
+      setRetentionData(retentionRes);
+      setPointsFlowData(pointsRes);
     } catch (err) {
       console.error('Failed to load dashboard data', err);
     } finally {
@@ -107,9 +117,15 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const loadSubscribers = async (page: number, q: string) => {
+  const loadSubscribers = async (page: number, q: string, status?: string, expiringIn?: number) => {
     try {
-      const res = await fetchSubscribers({ page, pageSize: 25, q });
+      const res = await fetchSubscribers({
+        page,
+        pageSize: 25,
+        q,
+        status,
+        expiringInDays: expiringIn
+      });
       setSubscribers(res.data || res.items || []);
       setSubTotal(res.meta?.totalItems || res.total || 0);
     } catch (err) {
@@ -117,12 +133,21 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const loadConnections = async () => {
-    try {
-      const res = await apiFetch<WebsiteConnection[]>('/api/website-connections');
-      setConnections(res);
-    } catch (err) {
-      console.error(err);
+  // ... (keep existing loadConnections)
+
+  // --- Card Actions ---
+  const handleCardClick = (type: 'active' | 'risk') => {
+    setActiveTab('subscribers');
+    setSubPage(1); // Reset to page 1
+
+    if (type === 'active') {
+      setSearchQuery('');
+      setStatusFilter('ACTIVE');
+      setExpiringFilter(undefined);
+    } else if (type === 'risk') {
+      setSearchQuery('');
+      setStatusFilter(undefined); // Or 'ACTIVE' if we only want active expiring? Usually expiring implies active.
+      setExpiringFilter(7); // "Expiring soon" usually means next 7 days in our logic
     }
   };
 
@@ -248,36 +273,57 @@ const Dashboard: React.FC = () => {
 
       {/* Overview Stats (Always Visible on Overview/Action tabs) */}
       {(activeTab === 'overview' || activeTab === 'action') && stats && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 animate-fade-in-up">
-          <StatCard
-            label={t('active_subscribers')}
-            value={stats.totalActive.toString()}
-            icon="fa-users" color="violet"
-          />
-          <StatCard
-            label="Points Liability"
-            value={stats.totalPointsRemaining.toLocaleString()}
-            trend="Unredeemed points" trendUp={false}
-            icon="fa-coins" color="cyan"
-          />
-          <StatCard
-            label={t('churn_risk')}
-            value={stats.totalExpired.toString()}
-            trend={`${stats.expiringSoonCount} expiring soon`} trendUp={false}
-            icon="fa-user-times" color="rose"
-          />
-          <StatCard
-            label={t('revenue_recovered')}
-            value="$0"
-            trend="Not available" trendUp={true}
-            icon="fa-check-circle" color="emerald"
-          />
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 animate-fade-in-up">
+            <StatCard
+              label={t('active_subscribers')}
+              value={stats.totalActive.toString()}
+              icon="fa-users" color="violet"
+              onClick={() => handleCardClick('active')}
+            />
+            <StatCard
+              label="Points Liability"
+              value={stats.totalPointsRemaining.toLocaleString()}
+              trend="Unredeemed points" trendUp={false}
+              icon="fa-coins" color="cyan"
+            // Points View not implemented yet, so no onClick
+            />
+            <StatCard
+              label={t('churn_risk')}
+              value={stats.totalExpired.toString()}
+              trend={`${stats.expiringSoonCount} expiring soon`} trendUp={false}
+              icon="fa-user-times" color="rose"
+              onClick={() => handleCardClick('risk')}
+            />
+            <StatCard
+              label={t('revenue_recovered')}
+              value="$0"
+              trend="Not available" trendUp={true}
+              icon="fa-check-circle" color="emerald"
+            />
+          </div>
+
+          {/* Charts Row - Only on Overview */}
+          {activeTab === 'overview' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 animate-fade-in-up animation-delay-100">
+              <RetentionForecastChart
+                data={retentionData?.dailyForecast || []}
+                summary={retentionData?.summary || { overdue: 0, today: 0, next7Days: 0 }}
+                isLoading={isLoading}
+              />
+              <PointsFlowChart
+                data={pointsFlowData}
+                isLoading={isLoading}
+              />
+            </div>
+          )}
+        </>
       )}
 
       <div className="animate-fade-in-up animation-delay-100">
         {activeTab === 'action' && (
           <ActionCenter
+            // ... existing props
             tasks={tasks}
             onSend={handleSendReminder}
             sendingTaskId={sendingTaskId}
@@ -295,10 +341,31 @@ const Dashboard: React.FC = () => {
               page={subPage}
               total={subTotal}
               onPageChange={setSubPage}
-              onAddSubscriber={() => { }} // TODO: Add create modal
+              onAddSubscriber={() => { }}
               onEdit={setEditingSubscriber}
               onDelete={handleDeleteSubscriber}
+            // Pass filter state functionality if View supports it, or just use it implicitly via loadSubscribers
+            // For now, let's add a "Clear Filters" button in the view if filters are active?
+            // The View currently doesn't accept filter props, so we just control data from here.
             />
+            {/* Show active filter banner if needed */}
+            {(statusFilter || expiringFilter !== undefined) && (
+              <div className="mb-4 flex items-center gap-2 text-sm text-zinc-400 bg-zinc-800/50 p-2 rounded-lg border border-zinc-700/50">
+                <i className="fas fa-filter text-violet-400"></i>
+                <span>
+                  Filtering by:
+                  {statusFilter && <span className="text-white ml-1 font-medium">Status: {statusFilter}</span>}
+                  {expiringFilter !== undefined && <span className="text-white ml-1 font-medium">Expiring in {expiringFilter} days</span>}
+                </span>
+                <button
+                  onClick={() => { setStatusFilter(undefined); setExpiringFilter(undefined); loadSubscribers(1, searchQuery); }}
+                  className="ml-auto text-xs hover:text-white underline"
+                >
+                  Clear Filters
+                </button>
+              </div>
+            )}
+
             <EditSubscriberModal
               isOpen={!!editingSubscriber}
               onClose={() => setEditingSubscriber(null)}

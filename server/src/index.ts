@@ -88,7 +88,11 @@ app.use(subscriberRouter);
 app.use(settingsRouter);
 app.use(reminderRouter);
 app.use(wooRouter);
+import { reportsRouter } from './routes/reports';
+// ...
+app.use(wooRouter);
 app.use(cronRouter);
+app.use(reportsRouter);
 
 // Log registered routes for debugging
 console.log('[Routes] Registered artlyRouter');
