@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
-
+import { prisma } from '../config/db';
 import { syncWooCustomersPage, backfillAllUsersHistory } from '../services/wooService';
 
-// ... (existing imports)
+export const wooRouter = Router();
 
-// ...
+wooRouter.use(authMiddleware);
 
 wooRouter.post('/api/woo/backfill', async (req, res, next) => {
   try {
@@ -23,10 +23,6 @@ wooRouter.post('/api/woo/backfill', async (req, res, next) => {
     next(error);
   }
 });
-
-export const wooRouter = Router();
-
-wooRouter.use(authMiddleware);
 
 import { prisma } from '../config/db';
 
