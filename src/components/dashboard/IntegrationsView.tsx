@@ -15,6 +15,8 @@ interface IntegrationsViewProps {
     isSaving: boolean;
     onSyncWoo: () => void;
     isSyncingWoo: boolean;
+    onBackfillWoo: () => void; // New prop
+    isBackfillingWoo: boolean; // New prop
     syncLog: string;
 }
 
@@ -29,6 +31,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     isSaving,
     onSyncWoo,
     isSyncingWoo,
+    onBackfillWoo,
+    isBackfillingWoo,
     syncLog
 }) => {
     const [newUrl, setNewUrl] = useState('');
@@ -73,17 +77,21 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                 onChange={(e) => setWooSettings({ ...wooSettings, consumerSecret: e.target.value })}
                             />
                             <div className="pt-4 flex flex-col gap-3">
-                                <div className="flex gap-3">
+                                <div className="flex flex-wrap gap-3">
                                     <Button onClick={onSave} disabled={isSaving}>
                                         {isSaving ? 'Saving...' : 'Save Credentials'}
                                     </Button>
-                                    <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo}>
+                                    <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo || isBackfillingWoo}>
                                         {isSyncingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-sync mr-2"></i>}
-                                        Test Sync
+                                        Sync Now
+                                    </Button>
+                                    <Button variant="secondary" onClick={onBackfillWoo} disabled={isSyncingWoo || isBackfillingWoo}>
+                                        {isBackfillingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-history mr-2"></i>}
+                                        Fetch Deep History
                                     </Button>
                                 </div>
 
-                                {isSyncingWoo && (
+                                {(isSyncingWoo || isBackfillingWoo) && (
                                     <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
                                         <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
                                     </div>
@@ -102,6 +110,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                         </div>
                     </Card>
                 </div>
+// ... existing code ...
 
                 {/* Plugin Connections */}
                 <div className="space-y-6">

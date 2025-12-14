@@ -188,3 +188,65 @@ export async function fetchUserPointsHistory(email: string, workspaceId?: string
     return [];
   }
 }
+
+export async function backfillAllUsersHistory(workspaceId?: string) {
+  // Resolve workspace ID
+  let wsId = workspaceId;
+  if (!wsId) {
+    const defaultWs = await prisma.workspace.findFirst();
+    if (!defaultWs) throw new Error('No workspace found');
+    wsId = defaultWs.id;
+  }
+
+  // Get all subscribers in batches
+  const subscribers = await prisma.subscriber.findMany({
+    where: { workspaceId: wsId },
+    select: { id: true, email: true }
+  });
+
+  console.log(`[Backfill] Found ${subscribers.length} subscribers. Starting history sync...`);
+
+  let processed = 0;
+  let historyEntries = 0;
+
+  for (const sub of subscribers) {
+    try {
+      const history = await fetchUserPointsHistory(sub.email, wsId);
+
+      if (history.length > 0) {
+        for (const entry of history) {
+          // Prevent duplicates by checking externalId (constructed from log ID)
+          const externalId = `woo_${entry.id}`;
+
+          // Check if exists
+          const exists = await prisma.pointHistory.findUnique({
+            where: { externalId }
+          });
+
+          if (!exists) {
+            await prisma.pointHistory.create({
+              data: {
+                subscriberId: sub.id,
+                change: typeof entry.points === 'number' ? entry.points : parseInt(entry.points, 10),
+                reason: entry.event || 'WooCommerce Event',
+                date: new Date(entry.date),
+                externalId: externalId
+              }
+            });
+            historyEntries++;
+          }
+        }
+      }
+      processed++;
+      if (processed % 10 === 0) console.log(`[Backfill] Processed ${processed}/${subscribers.length} users...`);
+
+      // Rate limit - wait 200ms between user fetches to avoid WP API throttling
+      await new Promise(r => setTimeout(r, 200));
+
+    } catch (err) {
+      console.error(`[Backfill] Failed for ${sub.email}:`, err);
+    }
+  }
+
+  return { usersProcessed: processed, historyEntriesCreated: historyEntries };
+}

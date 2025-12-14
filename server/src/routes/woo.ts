@@ -1,6 +1,28 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
-import { syncWooCustomersPage } from '../services/wooService';
+
+import { syncWooCustomersPage, backfillAllUsersHistory } from '../services/wooService';
+
+// ... (existing imports)
+
+// ...
+
+wooRouter.post('/api/woo/backfill', async (req, res, next) => {
+  try {
+    const user = (req as any).user;
+    const workspaceUser = await prisma.workspaceUser.findFirst({ where: { userId: user.id } });
+    if (!workspaceUser) return res.status(404).json({ message: 'Workspace not found' });
+
+    // Trigger background process (optional, but for long running task maybe better)
+    // For now, run and await, but client might timeout if thousands of users.
+    // User asked for "last 30 days as first batch".
+    // Let's await it.
+    const summary = await backfillAllUsersHistory(workspaceUser.workspaceId);
+    res.json(summary);
+  } catch (error) {
+    next(error);
+  }
+});
 
 export const wooRouter = Router();
 

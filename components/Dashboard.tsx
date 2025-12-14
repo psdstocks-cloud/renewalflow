@@ -63,8 +63,51 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncingWoo, setIsSyncingWoo] = useState(false);
+  const [isBackfillingWoo, setIsBackfillingWoo] = useState(false); // New State
   const [syncLog, setSyncLog] = useState('');
   const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
+
+  // ... (existing effects and data loading)
+
+  // ... (existing actions)
+
+  const handleBackfillWoo = async () => {
+    setIsBackfillingWoo(true);
+    setSyncLog('Starting deep history fetch... This may take a while.');
+    try {
+      const res = await apiFetch<{ usersProcessed: number; historyEntriesCreated: number }>('/api/woo/backfill', { method: 'POST' });
+      setSyncLog(`Backfill Complete! Processed ${res.usersProcessed} users, Created ${res.historyEntriesCreated} history entries.`);
+      // Refresh data to show charts
+      loadInitialData();
+    } catch (err: any) {
+      console.error(err);
+      setSyncLog(`Backfill Error: ${err.message}`);
+    } finally {
+      setIsBackfillingWoo(false);
+    }
+  };
+
+  // ... (render)
+
+  {
+    activeTab === 'integrations' && (
+      <IntegrationsView
+        wooSettings={wooSettings}
+        setWooSettings={setWooSettings}
+        connections={connections}
+        onCreateConnection={handleCreateConnection}
+        onDeleteConnection={handleDeleteConnection}
+        onRegenerateKey={() => { }}
+        onSave={handleSaveSettings}
+        isSaving={isSaving}
+        onSyncWoo={handleSyncWoo}
+        isSyncingWoo={isSyncingWoo}
+        onBackfillWoo={handleBackfillWoo}
+        isBackfillingWoo={isBackfillingWoo}
+        syncLog={syncLog}
+      />
+    )
+  }
 
   // Subscribers Listing State
   const [subPage, setSubPage] = useState(1);
