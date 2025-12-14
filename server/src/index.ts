@@ -14,6 +14,7 @@ import { websiteConnectionRouter } from './routes/websiteConnections';
 import webhookRouter from './routes/webhookRoutes';
 import { startCronJobs } from './services/cronScheduler';
 import { checkDatabaseConnection } from './config/db';
+import { reportsRouter } from './routes/reports';
 
 const app = express();
 
