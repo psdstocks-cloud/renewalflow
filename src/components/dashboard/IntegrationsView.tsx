@@ -17,6 +17,7 @@ interface IntegrationsViewProps {
     isSyncingWoo: boolean;
     onBackfillWoo: () => void; // New prop
     isBackfillingWoo: boolean; // New prop
+    backfillProgress?: number; // New prop for percentage
     syncLog: string;
 }
 
@@ -33,6 +34,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     isSyncingWoo,
     onBackfillWoo,
     isBackfillingWoo,
+    backfillProgress,
     syncLog
 }) => {
     const [newUrl, setNewUrl] = useState('');
@@ -91,11 +93,27 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                     </Button>
                                 </div>
 
-                                {(isSyncingWoo || isBackfillingWoo) && (
+                                {isSyncingWoo && (
                                     <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
                                         <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
                                     </div>
                                 )}
+
+                                {isBackfillingWoo && backfillProgress !== undefined && (
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-zinc-400">
+                                            <span>Progress</span>
+                                            <span>{Math.round(backfillProgress)}%</span>
+                                        </div>
+                                        <div className="w-full h-2 bg-zinc-800 rounded overflow-hidden transition-all">
+                                            <div
+                                                className="h-full bg-violet-500 transition-all duration-300 ease-out"
+                                                style={{ width: `${backfillProgress}%` }}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {wooSettings.lastSync && (
                                     <div className="text-xs text-zinc-500 text-center">
                                         Last synced: {new Date(wooSettings.lastSync).toLocaleString()}

@@ -189,7 +189,8 @@ export async function fetchUserPointsHistory(email: string, workspaceId?: string
   }
 }
 
-export async function backfillAllUsersHistory(workspaceId?: string) {
+
+export async function backfillHistoryBatch(page: number, limit: number, workspaceId?: string) {
   // Resolve workspace ID
   let wsId = workspaceId;
   if (!wsId) {
@@ -198,13 +199,20 @@ export async function backfillAllUsersHistory(workspaceId?: string) {
     wsId = defaultWs.id;
   }
 
-  // Get all subscribers in batches
+  // Count total for progress calculation
+  const totalSubscribers = await prisma.subscriber.count({ where: { workspaceId: wsId } });
+  const totalPages = Math.ceil(totalSubscribers / limit);
+
+  // Get batch
   const subscribers = await prisma.subscriber.findMany({
     where: { workspaceId: wsId },
-    select: { id: true, email: true }
+    select: { id: true, email: true },
+    skip: (page - 1) * limit,
+    take: limit,
+    orderBy: { id: 'asc' } // Ensure consistent ordering
   });
 
-  console.log(`[Backfill] Found ${subscribers.length} subscribers. Starting history sync...`);
+  console.log(`[Backfill] Processing batch ${page}/${totalPages} (${subscribers.length} users)...`);
 
   let processed = 0;
   let historyEntries = 0;
@@ -238,15 +246,24 @@ export async function backfillAllUsersHistory(workspaceId?: string) {
         }
       }
       processed++;
-      if (processed % 10 === 0) console.log(`[Backfill] Processed ${processed}/${subscribers.length} users...`);
 
-      // Rate limit - wait 200ms between user fetches to avoid WP API throttling
-      await new Promise(r => setTimeout(r, 200));
+      // Rate limit - wait 100ms between user fetches (reduced since batch is small)
+      await new Promise(r => setTimeout(r, 100));
 
     } catch (err) {
       console.error(`[Backfill] Failed for ${sub.email}:`, err);
     }
   }
 
-  return { usersProcessed: processed, historyEntriesCreated: historyEntries };
+  return {
+    processed,
+    historyEntriesCreated: historyEntries,
+    pagination: {
+      page,
+      limit,
+      totalSubscribers,
+      totalPages,
+      hasMore: page < totalPages
+    }
+  };
 }

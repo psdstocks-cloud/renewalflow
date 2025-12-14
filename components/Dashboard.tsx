@@ -63,7 +63,8 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncingWoo, setIsSyncingWoo] = useState(false);
-  const [isBackfillingWoo, setIsBackfillingWoo] = useState(false); // New State
+  const [isBackfillingWoo, setIsBackfillingWoo] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<number | undefined>(undefined);
   const [syncLog, setSyncLog] = useState('');
   const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
 
@@ -73,10 +74,48 @@ const Dashboard: React.FC = () => {
 
   const handleBackfillWoo = async () => {
     setIsBackfillingWoo(true);
-    setSyncLog('Starting deep history fetch... This may take a while.');
+    setBackfillProgress(0);
+    setSyncLog('Starting deep history fetch...');
+
+    let page = 1;
+    const limit = 5; // Small batch size to avoid timeouts
+    let totalProcessed = 0;
+    let totalHistory = 0;
+
     try {
-      const res = await apiFetch<{ usersProcessed: number; historyEntriesCreated: number }>('/api/woo/backfill', { method: 'POST' });
-      setSyncLog(`Backfill Complete! Processed ${res.usersProcessed} users, Created ${res.historyEntriesCreated} history entries.`);
+      while (true) {
+        const res = await apiFetch<{
+          processed: number;
+          historyEntriesCreated: number;
+          pagination: {
+            page: number;
+            limit: number;
+            totalSubscribers: number;
+            totalPages: number;
+            hasMore: boolean;
+          }
+        }>(`/api/woo/backfill?page=${page}&limit=${limit}`, { method: 'POST' });
+
+        totalProcessed += res.processed;
+        totalHistory += res.historyEntriesCreated;
+
+        // Update Progress
+        const progress = Math.min(100, Math.round((totalProcessed / res.pagination.totalSubscribers) * 100));
+        setBackfillProgress(progress);
+        setSyncLog(`Processed ${totalProcessed}/${res.pagination.totalSubscribers} users...`);
+
+        if (!res.pagination.hasMore) {
+          break;
+        }
+
+        page++;
+        // Small delay to allow UI updates and prevent hammering
+        await new Promise(r => setTimeout(r, 100));
+      }
+
+      setSyncLog(`Backfill Complete! Processed ${totalProcessed} users, Created ${totalHistory} new history entries.`);
+      setBackfillProgress(100);
+
       // Refresh data to show charts
       loadInitialData();
     } catch (err: any) {
@@ -84,6 +123,7 @@ const Dashboard: React.FC = () => {
       setSyncLog(`Backfill Error: ${err.message}`);
     } finally {
       setIsBackfillingWoo(false);
+      setTimeout(() => setBackfillProgress(undefined), 3000); // Hide progress bar after 3s
     }
   };
 
@@ -428,6 +468,7 @@ const Dashboard: React.FC = () => {
               isSyncingWoo={isSyncingWoo}
               onBackfillWoo={handleBackfillWoo}
               isBackfillingWoo={isBackfillingWoo}
+              backfillProgress={backfillProgress}
               syncLog={syncLog}
             />
           )
