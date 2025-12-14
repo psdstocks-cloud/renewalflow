@@ -19,6 +19,8 @@ interface IntegrationsViewProps {
     isBackfillingWoo: boolean; // New prop
     backfillProgress?: number; // New prop for percentage
     syncLog: string;
+    onSyncRecent: () => void; // New prop
+    isSyncingRecent: boolean; // New prop
 }
 
 export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
@@ -35,7 +37,9 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     onBackfillWoo,
     isBackfillingWoo,
     backfillProgress,
-    syncLog
+    syncLog,
+    onSyncRecent,
+    isSyncingRecent
 }) => {
     const [newUrl, setNewUrl] = useState('');
     const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -83,11 +87,15 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                     <Button onClick={onSave} disabled={isSaving}>
                                         {isSaving ? 'Saving...' : 'Save Credentials'}
                                     </Button>
-                                    <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo || isBackfillingWoo}>
+                                    <Button variant="outline" onClick={onSyncWoo} disabled={isSyncingWoo || isBackfillingWoo || isSyncingRecent}>
                                         {isSyncingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-sync mr-2"></i>}
                                         Sync Now
                                     </Button>
-                                    <Button variant="secondary" onClick={onBackfillWoo} disabled={isSyncingWoo || isBackfillingWoo}>
+                                    <Button variant="outline" onClick={onSyncRecent} disabled={isSyncingWoo || isBackfillingWoo || isSyncingRecent}>
+                                        {isSyncingRecent ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-bolt mr-2 text-yellow-500"></i>}
+                                        Fetch Recent Activity
+                                    </Button>
+                                    <Button variant="secondary" onClick={onBackfillWoo} disabled={isSyncingWoo || isBackfillingWoo || isSyncingRecent}>
                                         {isBackfillingWoo ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-history mr-2"></i>}
                                         Fetch Deep History
                                     </Button>
@@ -96,6 +104,12 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                                 {isSyncingWoo && (
                                     <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
                                         <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
+                                    </div>
+                                )}
+
+                                {isSyncingRecent && (
+                                    <div className="w-full h-1 bg-zinc-800 rounded overflow-hidden">
+                                        <div className="h-full bg-yellow-500 animate-progress-indeterminate"></div>
                                     </div>
                                 )}
 

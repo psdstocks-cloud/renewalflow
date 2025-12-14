@@ -40,7 +40,8 @@ wooRouter.post('/api/woo/sync', async (req, res, next) => {
     }
 
     const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
-    const summary = await syncWooCustomersPage(page, workspaceUser.workspaceId);
+    const fetchHistory = req.query.include_history === 'true';
+    const summary = await syncWooCustomersPage(page, workspaceUser.workspaceId, fetchHistory);
     res.json(summary);
   } catch (error) {
     next(error);

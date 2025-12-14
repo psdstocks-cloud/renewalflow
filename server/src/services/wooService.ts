@@ -10,7 +10,7 @@ interface CustomSyncUser {
   last_order_date: string | null;
 }
 
-export async function syncWooCustomersPage(page: number = 1, workspaceId?: string) {
+export async function syncWooCustomersPage(page: number = 1, workspaceId?: string, fetchHistory: boolean = false) {
   // Resolve workspace ID
   let wsId = workspaceId;
   if (!wsId) {
@@ -92,9 +92,13 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
           // We don't change workspaceId on update
         }
       });
+      // Update history if requested
+      if (fetchHistory) {
+        await processUserHistory(existing.id, user.email, wsId);
+      }
       updated++;
     } else {
-      await prisma.subscriber.create({
+      const newSub = await prisma.subscriber.create({
         data: {
           workspaceId: wsId,
           email: user.email,
@@ -108,6 +112,10 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
           endDate: nextPaymentDate
         }
       });
+      // Initial history fetch for new user
+      if (fetchHistory) {
+        await processUserHistory(newSub.id, user.email, wsId);
+      }
       created++;
     }
   }
@@ -116,6 +124,41 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   const totalPages = Math.ceil(totalUsers / limit);
 
   return { created, updated, totalUsers, totalPages, currentPage: page };
+}
+
+export async function processUserHistory(subscriberId: string, email: string, wsId: string) {
+  let created = 0;
+  try {
+    const history = await fetchUserPointsHistory(email, wsId);
+
+    if (history.length > 0) {
+      for (const entry of history) {
+        // Prevent duplicates by checking externalId (constructed from log ID)
+        const externalId = `woo_${entry.id}`;
+
+        // Check if exists
+        const exists = await prisma.pointHistory.findUnique({
+          where: { externalId }
+        });
+
+        if (!exists) {
+          await prisma.pointHistory.create({
+            data: {
+              subscriberId: subscriberId,
+              change: typeof entry.points === 'number' ? entry.points : parseInt(entry.points, 10),
+              reason: entry.event || 'WooCommerce Event',
+              date: new Date(entry.date),
+              externalId: externalId
+            }
+          });
+          created++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[History Core] Failed for ${email}:`, err);
+  }
+  return created;
 }
 
 export async function syncAllWooCustomers(workspaceId?: string) {
@@ -219,32 +262,8 @@ export async function backfillHistoryBatch(page: number, limit: number, workspac
 
   for (const sub of subscribers) {
     try {
-      const history = await fetchUserPointsHistory(sub.email, wsId);
-
-      if (history.length > 0) {
-        for (const entry of history) {
-          // Prevent duplicates by checking externalId (constructed from log ID)
-          const externalId = `woo_${entry.id}`;
-
-          // Check if exists
-          const exists = await prisma.pointHistory.findUnique({
-            where: { externalId }
-          });
-
-          if (!exists) {
-            await prisma.pointHistory.create({
-              data: {
-                subscriberId: sub.id,
-                change: typeof entry.points === 'number' ? entry.points : parseInt(entry.points, 10),
-                reason: entry.event || 'WooCommerce Event',
-                date: new Date(entry.date),
-                externalId: externalId
-              }
-            });
-            historyEntries++;
-          }
-        }
-      }
+      const count = await processUserHistory(sub.id, sub.email, wsId);
+      historyEntries += count;
       processed++;
 
       // Rate limit - wait 100ms between user fetches (reduced since batch is small)

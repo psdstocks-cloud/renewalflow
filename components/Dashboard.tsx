@@ -63,6 +63,7 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncingWoo, setIsSyncingWoo] = useState(false);
+  const [isSyncingRecent, setIsSyncingRecent] = useState(false); // New State
   const [isBackfillingWoo, setIsBackfillingWoo] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState<number | undefined>(undefined);
   const [syncLog, setSyncLog] = useState('');
@@ -326,6 +327,53 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleSyncRecent = async () => {
+    setIsSyncingRecent(true);
+    setSyncLog('Fetching recent activity and history...');
+    try {
+      // Step 1: Fetch Page 1 to get total pages
+      let totalCreated = 0;
+      let totalUpdated = 0;
+
+      setSyncLog(`Checking for recent updates...`);
+      // We pass include_history=true to fetch history for updated users
+      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1&include_history=true', { method: 'POST' });
+
+      totalCreated += firstRes.created;
+      totalUpdated += firstRes.updated;
+      const totalPages = firstRes.totalPages;
+      const totalUsers = firstRes.totalUsers; // Total matching users (updated only usually)
+
+      if (totalPages > 1) {
+        for (let p = 2; p <= totalPages; p++) {
+          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
+          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p + '&include_history=true', { method: 'POST' });
+          totalCreated += res.created;
+          totalUpdated += res.updated;
+        }
+      }
+
+      setSyncLog(`Recent Activity Synced! Updated/Created ${totalCreated + totalUpdated} users and their history.`);
+
+      // Update last sync time
+      const now = new Date().toISOString();
+      const newWooSettings = { ...wooSettings, lastSync: now };
+      await apiFetch('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
+      });
+      setWooSettings(newWooSettings);
+
+      loadSubscribers(subPage, searchQuery); // Refresh the table
+      loadInitialData(); // Refresh stats as well
+    } catch (err: any) {
+      console.error(err);
+      setSyncLog(`Error: ${err.message}`);
+    } finally {
+      setIsSyncingRecent(false);
+    }
+  };
+
   const handleLogout = async () => {
     await signOut();
     navigate('/auth/sign-in');
@@ -470,6 +518,8 @@ const Dashboard: React.FC = () => {
               isBackfillingWoo={isBackfillingWoo}
               backfillProgress={backfillProgress}
               syncLog={syncLog}
+              onSyncRecent={handleSyncRecent}
+              isSyncingRecent={isSyncingRecent}
             />
           )
         }
