@@ -110,7 +110,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                         </div>
                     </Card>
                 </div>
-// ... existing code ...
+
 
                 {/* Plugin Connections */}
                 <div className="space-y-6">

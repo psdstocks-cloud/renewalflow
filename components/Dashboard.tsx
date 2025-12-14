@@ -89,25 +89,7 @@ const Dashboard: React.FC = () => {
 
   // ... (render)
 
-  {
-    activeTab === 'integrations' && (
-      <IntegrationsView
-        wooSettings={wooSettings}
-        setWooSettings={setWooSettings}
-        connections={connections}
-        onCreateConnection={handleCreateConnection}
-        onDeleteConnection={handleDeleteConnection}
-        onRegenerateKey={() => { }}
-        onSave={handleSaveSettings}
-        isSaving={isSaving}
-        onSyncWoo={handleSyncWoo}
-        isSyncingWoo={isSyncingWoo}
-        onBackfillWoo={handleBackfillWoo}
-        isBackfillingWoo={isBackfillingWoo}
-        syncLog={syncLog}
-      />
-    )
-  }
+
 
   // Subscribers Listing State
   const [subPage, setSubPage] = useState(1);
@@ -130,7 +112,9 @@ const Dashboard: React.FC = () => {
     }
   }, [subPage, searchQuery, activeTab, statusFilter, expiringFilter]);
 
-  // ... (keep existing effects)
+  useEffect(() => {
+    loadConnections();
+  }, []);
 
   // --- Data Loading ---
   const loadInitialData = async () => {
@@ -176,7 +160,14 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // ... (keep existing loadConnections)
+  const loadConnections = async () => {
+    try {
+      const res = await apiFetch<WebsiteConnection[]>('/api/website-connections');
+      setConnections(res);
+    } catch (err) {
+      console.error('Failed to load connections', err);
+    }
+  };
 
   // --- Card Actions ---
   const handleCardClick = (type: 'active' | 'risk') => {
@@ -435,6 +426,8 @@ const Dashboard: React.FC = () => {
               isSaving={isSaving}
               onSyncWoo={handleSyncWoo}
               isSyncingWoo={isSyncingWoo}
+              onBackfillWoo={handleBackfillWoo}
+              isBackfillingWoo={isBackfillingWoo}
               syncLog={syncLog}
             />
           )
