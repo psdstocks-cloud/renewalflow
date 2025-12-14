@@ -24,7 +24,7 @@ wooRouter.post('/api/woo/backfill', async (req, res, next) => {
   }
 });
 
-import { prisma } from '../config/db';
+
 
 wooRouter.post('/api/woo/sync', async (req, res, next) => {
   try {
