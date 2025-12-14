@@ -587,6 +587,89 @@ export const processCharges = async (rawCharges: unknown, workspaceId?: string |
           createdAt,
         },
       });
+
+      // Create revenue transaction if we have a subscriber
+      // Find subscriber by email (customer.email should be WordPress user email)
+      if (customer.email) {
+        try {
+          const subscriber = await prisma.subscriber.findUnique({
+            where: { email: customer.email },
+            select: {
+              id: true,
+              workspaceId: true,
+              status: true,
+              lastPurchaseDate: true,
+              endDate: true,
+              planName: true,
+              amount: true,
+            },
+          });
+
+          if (subscriber) {
+            // Import revenue service functions
+            const {
+              normalizePaymentMethod,
+              determineTransactionType,
+              findAttributedEmailLog,
+              createRevenueTransaction,
+            } = await import('./revenueService');
+
+            // Normalize payment method
+            const paymentMethod = normalizePaymentMethod(charge.payment_method);
+
+            // Determine transaction type
+            const transactionType = determineTransactionType(
+              {
+                status: subscriber.status,
+                lastPurchaseDate: subscriber.lastPurchaseDate,
+                endDate: subscriber.endDate,
+              },
+              createdAt
+            );
+
+            // Find attributed email log (reminder that may have triggered renewal)
+            const emailLogId =
+              transactionType === 'renewal'
+                ? await findAttributedEmailLog(subscriber.id, createdAt)
+                : null;
+
+            // Map payment status
+            const paymentStatus =
+              charge.status === 'completed' || charge.status === 'processing'
+                ? 'completed'
+                : charge.status === 'failed' || charge.status === 'cancelled'
+                ? 'failed'
+                : 'pending';
+
+            // Create revenue transaction
+            await createRevenueTransaction({
+              workspaceId: subscriber.workspaceId,
+              subscriberId: subscriber.id,
+              amount: charge.amount,
+              currency: charge.currency || 'EGP',
+              transactionType,
+              paymentMethod,
+              paymentStatus,
+              externalOrderId: charge.order_id,
+              externalChargeId: String(charge.external_charge_id),
+              planName: subscriber.planName,
+              planAmount: subscriber.amount,
+              transactionDate: createdAt,
+              emailLogId,
+            });
+
+            console.log(
+              `[processCharges] Created revenue transaction for subscriber ${subscriber.id}, order ${charge.order_id}`
+            );
+          }
+        } catch (revenueError: any) {
+          // Log error but don't fail the charge processing
+          console.error(
+            `[processCharges] Error creating revenue transaction for charge ${charge.external_charge_id}:`,
+            revenueError.message
+          );
+        }
+      }
     }
 
     upserted += 1;
