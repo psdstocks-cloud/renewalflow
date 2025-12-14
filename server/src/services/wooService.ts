@@ -10,7 +10,7 @@ interface CustomSyncUser {
   last_order_date: string | null;
 }
 
-export async function syncWooCustomersPage(page: number = 1, workspaceId?: string, fetchHistory: boolean = false) {
+export async function syncWooCustomersPage(page: number = 1, workspaceId?: string, fetchHistory: boolean = false, customStartDate?: string) {
   // Resolve workspace ID
   let wsId = workspaceId;
   if (!wsId) {
@@ -38,7 +38,10 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   // Add secret key for security
   let url = `${baseUrl}?page=${page}&limit=${limit}&secret=renewalflow_secure_sync_2024`;
 
-  if (wooSettings.lastSync) {
+  if (customStartDate) {
+    console.log(`[Sync] Using custom start date: ${customStartDate}`);
+    url += `&updated_after=${encodeURIComponent(customStartDate)}`;
+  } else if (wooSettings.lastSync) {
     console.log(`[Sync] Found lastSync: ${wooSettings.lastSync}`);
     url += `&updated_after=${encodeURIComponent(wooSettings.lastSync)}`;
   } else {

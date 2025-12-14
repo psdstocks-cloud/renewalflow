@@ -335,9 +335,16 @@ const Dashboard: React.FC = () => {
       let totalCreated = 0;
       let totalUpdated = 0;
 
-      setSyncLog(`Checking for recent updates...`);
+      setSyncLog(`Checking for recent updates (last 30 days)...`);
+
+      // Calculate date 30 days ago to force recent fetch even if lastSync is recent
+      const date = new Date();
+      date.setDate(date.getDate() - 30);
+      const updatedAfter = date.toISOString();
+
       // We pass include_history=true to fetch history for updated users
-      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1&include_history=true', { method: 'POST' });
+      // AND explicitly pass updated_after to ignore the potentially 'too fresh' lastSync from DB
+      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>(`/api/woo/sync?page=1&include_history=true&updated_after=${encodeURIComponent(updatedAfter)}`, { method: 'POST' });
 
       totalCreated += firstRes.created;
       totalUpdated += firstRes.updated;
@@ -347,7 +354,7 @@ const Dashboard: React.FC = () => {
       if (totalPages > 1) {
         for (let p = 2; p <= totalPages; p++) {
           setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
-          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p + '&include_history=true', { method: 'POST' });
+          const res = await apiFetch<{ created: number; updated: number }>(`/api/woo/sync?page=${p}&include_history=true&updated_after=${encodeURIComponent(updatedAfter)}`, { method: 'POST' });
           totalCreated += res.created;
           totalUpdated += res.updated;
         }
