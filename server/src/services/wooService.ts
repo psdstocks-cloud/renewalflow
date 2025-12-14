@@ -289,3 +289,164 @@ export async function backfillHistoryBatch(page: number, limit: number, workspac
     }
   };
 }
+
+// --- Background Sync Management ---
+
+// Simple in-memory state for now
+interface BackgroundSyncJob {
+  workspaceId: string;
+  type: 'backfill' | 'sync';
+  status: 'idle' | 'running' | 'completed' | 'error';
+  progress: number;
+  message: string;
+  total: number;
+  processed: number;
+}
+
+const activeJobs: Record<string, BackgroundSyncJob> = {};
+
+export function getSyncStatus(workspaceId: string) {
+  return activeJobs[workspaceId] || { status: 'idle', progress: 0, message: '', total: 0, processed: 0 };
+}
+
+export async function startBackgroundBackfill(workspaceId: string, limit: number = 5) {
+  // If already running, return current status
+  if (activeJobs[workspaceId]?.status === 'running') {
+    return activeJobs[workspaceId];
+  }
+
+  // Init Job
+  activeJobs[workspaceId] = {
+    workspaceId,
+    type: 'backfill',
+    status: 'running',
+    progress: 0,
+    message: 'Starting backfill...',
+    total: 0,
+    processed: 0
+  };
+
+  // Run in background (fire and forget)
+  (async () => {
+    try {
+      let page = 1;
+      let totalProcessed = 0;
+      let totalHistory = 0;
+
+      while (true) {
+        // We reuse the logic from backfillHistoryBatch but slightly modified to just return raw count
+        const result = await backfillHistoryBatch(page, limit, workspaceId);
+
+        totalProcessed += result.processed;
+        totalHistory += result.historyEntriesCreated;
+
+        // Update State
+        const job = activeJobs[workspaceId];
+        job.total = result.pagination.totalSubscribers;
+        job.processed = totalProcessed;
+        // Calculation might be off if totalSubscribers changes or if pages > totalPages logic
+        // But roughly:
+        const percent = Math.min(100, Math.round((totalProcessed / Math.max(job.total, 1)) * 100));
+        job.progress = percent;
+        job.message = `Processing batch ${page}/${result.pagination.totalPages}...`;
+
+        if (!result.pagination.hasMore) {
+          break;
+        }
+
+        page++;
+        // Small delay
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      activeJobs[workspaceId] = {
+        ...activeJobs[workspaceId],
+        status: 'completed',
+        progress: 100,
+        message: `Backfill Complete! Processed ${totalProcessed} users.`
+      };
+
+    } catch (err: any) {
+      console.error(`[Backfill Job] Error:`, err);
+      activeJobs[workspaceId] = {
+        ...activeJobs[workspaceId],
+        status: 'error',
+        message: `Failed: ${err.message}`
+      };
+    }
+  })();
+
+  return activeJobs[workspaceId];
+}
+
+
+export async function startBackgroundSync(workspaceId: string, updatedAfter?: string) {
+  if (activeJobs[workspaceId]?.status === 'running') {
+    return activeJobs[workspaceId];
+  }
+
+  activeJobs[workspaceId] = {
+    workspaceId,
+    type: 'sync',
+    status: 'running',
+    progress: 5,
+    message: 'Starting sync...',
+    total: 0,
+    processed: 0
+  };
+
+  (async () => {
+    try {
+      let page = 1;
+      let totalCreated = 0;
+      let totalUpdated = 0;
+
+      // Page 1
+      const firstRes = await syncWooCustomersPage(1, workspaceId, true, updatedAfter);
+
+      totalCreated += firstRes.created;
+      totalUpdated += firstRes.updated;
+      const totalPages = firstRes.totalPages;
+      const totalUsers = firstRes.totalUsers;
+
+      activeJobs[workspaceId].total = totalUsers;
+      activeJobs[workspaceId].processed = totalCreated + totalUpdated;
+      activeJobs[workspaceId].message = `Syncing batch 1/${totalPages}...`;
+
+      // If 1 page, we are done
+      if (totalPages <= 1) {
+        activeJobs[workspaceId].progress = 100;
+      } else {
+        activeJobs[workspaceId].progress = Math.round((1 / totalPages) * 100);
+        for (let p = 2; p <= totalPages; p++) {
+          const res = await syncWooCustomersPage(p, workspaceId, true, updatedAfter);
+          totalCreated += res.created;
+          totalUpdated += res.updated;
+
+          activeJobs[workspaceId].processed += (res.created + res.updated);
+          activeJobs[workspaceId].progress = Math.min(100, Math.round((p / totalPages) * 100));
+          activeJobs[workspaceId].message = `Syncing batch ${p}/${totalPages}...`;
+
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+
+      activeJobs[workspaceId] = {
+        ...activeJobs[workspaceId],
+        status: 'completed',
+        progress: 100,
+        message: `Sync Complete! Updated/Created ${totalCreated + totalUpdated} users.`
+      };
+
+    } catch (err: any) {
+      console.error(`[Sync Job] Error:`, err);
+      activeJobs[workspaceId] = {
+        ...activeJobs[workspaceId],
+        status: 'error',
+        message: `Failed: ${err.message}`
+      };
+    }
+  })();
+
+  return activeJobs[workspaceId];
+}

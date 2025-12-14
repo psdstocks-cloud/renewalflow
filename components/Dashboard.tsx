@@ -76,55 +76,43 @@ const Dashboard: React.FC = () => {
   const handleBackfillWoo = async () => {
     setIsBackfillingWoo(true);
     setBackfillProgress(0);
-    setSyncLog('Starting deep history fetch...');
-
-    let page = 1;
-    const limit = 5; // Small batch size to avoid timeouts
-    let totalProcessed = 0;
-    let totalHistory = 0;
+    setSyncLog('Starting background deep history fetch...');
 
     try {
-      while (true) {
-        const res = await apiFetch<{
-          processed: number;
-          historyEntriesCreated: number;
-          pagination: {
-            page: number;
-            limit: number;
-            totalSubscribers: number;
-            totalPages: number;
-            hasMore: boolean;
+      // Start Background Job
+      await apiFetch('/api/woo/backfill?background=true', { method: 'POST' });
+
+      // Poll for status
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await apiFetch<{ status: string; progress: number; message: string; processed: number; total: number }>('/api/woo/status');
+
+          setBackfillProgress(status.progress);
+          setSyncLog(status.message);
+
+          if (status.status === 'completed' || status.status === 'error') {
+            clearInterval(pollInterval);
+            setIsBackfillingWoo(false);
+
+            if (status.status === 'completed') {
+              setSyncLog(status.message); // Ensure final message shown
+              setBackfillProgress(100);
+              loadInitialData(); // Refresh data
+            } else {
+              setSyncLog(`Error: ${status.message}`);
+            }
+
+            setTimeout(() => setBackfillProgress(undefined), 5000);
           }
-        }>(`/api/woo/backfill?page=${page}&limit=${limit}`, { method: 'POST' });
-
-        totalProcessed += res.processed;
-        totalHistory += res.historyEntriesCreated;
-
-        // Update Progress
-        const progress = Math.min(100, Math.round((totalProcessed / res.pagination.totalSubscribers) * 100));
-        setBackfillProgress(progress);
-        setSyncLog(`Processed ${totalProcessed}/${res.pagination.totalSubscribers} users...`);
-
-        if (!res.pagination.hasMore) {
-          break;
+        } catch (err) {
+          console.error('Poll error', err);
         }
+      }, 1000);
 
-        page++;
-        // Small delay to allow UI updates and prevent hammering
-        await new Promise(r => setTimeout(r, 100));
-      }
-
-      setSyncLog(`Backfill Complete! Processed ${totalProcessed} users, Created ${totalHistory} new history entries.`);
-      setBackfillProgress(100);
-
-      // Refresh data to show charts
-      loadInitialData();
     } catch (err: any) {
       console.error(err);
-      setSyncLog(`Backfill Error: ${err.message}`);
-    } finally {
+      setSyncLog(`Backfill Start Error: ${err.message}`);
       setIsBackfillingWoo(false);
-      setTimeout(() => setBackfillProgress(undefined), 3000); // Hide progress bar after 3s
     }
   };
 
@@ -329,54 +317,52 @@ const Dashboard: React.FC = () => {
 
   const handleSyncRecent = async () => {
     setIsSyncingRecent(true);
-    setSyncLog('Fetching recent activity and history...');
+    setSyncLog('Starting background sync...');
     try {
-      // Step 1: Fetch Page 1 to get total pages
-      let totalCreated = 0;
-      let totalUpdated = 0;
+      setSyncLog(`Initiating background sync (last 30 days)...`);
 
-      setSyncLog(`Checking for recent updates (last 30 days)...`);
-
-      // Calculate date 30 days ago to force recent fetch even if lastSync is recent
       const date = new Date();
       date.setDate(date.getDate() - 30);
       const updatedAfter = date.toISOString();
 
-      // We pass include_history=true to fetch history for updated users
-      // AND explicitly pass updated_after to ignore the potentially 'too fresh' lastSync from DB
-      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>(`/api/woo/sync?page=1&include_history=true&updated_after=${encodeURIComponent(updatedAfter)}`, { method: 'POST' });
+      // Start Background Job
+      await apiFetch(`/api/woo/sync?background=true&include_history=true&updated_after=${encodeURIComponent(updatedAfter)}`, { method: 'POST' });
 
-      totalCreated += firstRes.created;
-      totalUpdated += firstRes.updated;
-      const totalPages = firstRes.totalPages;
-      const totalUsers = firstRes.totalUsers; // Total matching users (updated only usually)
+      // Poll
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await apiFetch<{ status: string; progress: number; message: string }>('/api/woo/status');
 
-      if (totalPages > 1) {
-        for (let p = 2; p <= totalPages; p++) {
-          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
-          const res = await apiFetch<{ created: number; updated: number }>(`/api/woo/sync?page=${p}&include_history=true&updated_after=${encodeURIComponent(updatedAfter)}`, { method: 'POST' });
-          totalCreated += res.created;
-          totalUpdated += res.updated;
-        }
-      }
+          // Re-use backfill progress bar for sync status visualization if we want, or just log
+          // For now, let's look at the log and spinner
+          setSyncLog(status.message);
 
-      setSyncLog(`Recent Activity Synced! Updated/Created ${totalCreated + totalUpdated} users and their history.`);
+          if (status.status === 'completed' || status.status === 'error') {
+            clearInterval(pollInterval);
+            setIsSyncingRecent(false);
 
-      // Update last sync time
-      const now = new Date().toISOString();
-      const newWooSettings = { ...wooSettings, lastSync: now };
-      await apiFetch('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
-      });
-      setWooSettings(newWooSettings);
+            if (status.status === 'completed') {
+              setSyncLog(status.message);
 
-      loadSubscribers(subPage, searchQuery); // Refresh the table
-      loadInitialData(); // Refresh stats as well
+              // Update last sync time manually or fetch settings again?
+              // The backend job didn't update settings?
+              // Let's update settings here for UI consistency
+              const now = new Date().toISOString();
+              const newWooSettings = { ...wooSettings, lastSync: now };
+              setWooSettings(newWooSettings); // Optimistic update
+
+              loadSubscribers(subPage, searchQuery);
+              loadInitialData();
+            } else {
+              setSyncLog(`Error: ${status.message}`);
+            }
+          }
+        } catch (e) { console.error(e); }
+      }, 1000);
+
     } catch (err: any) {
       console.error(err);
       setSyncLog(`Error: ${err.message}`);
-    } finally {
       setIsSyncingRecent(false);
     }
   };
