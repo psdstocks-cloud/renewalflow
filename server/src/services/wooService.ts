@@ -29,7 +29,7 @@ export async function syncWooCustomersPage(page: number = 1, workspaceId?: strin
   const auth = Buffer.from(`${wooSettings.consumerKey}:${wooSettings.consumerSecret}`).toString('base64');
   const headers = { Authorization: `Basic ${auth}` };
 
-  const limit = 10;
+  const limit = 50; // Increased from 10 to 50 for faster sync
   let created = 0;
   let updated = 0;
 
@@ -263,18 +263,21 @@ export async function backfillHistoryBatch(page: number, limit: number, workspac
   let processed = 0;
   let historyEntries = 0;
 
-  for (const sub of subscribers) {
-    try {
-      const count = await processUserHistory(sub.id, sub.email, wsId);
-      historyEntries += count;
-      processed++;
-
-      // Rate limit - wait 100ms between user fetches (reduced since batch is small)
-      await new Promise(r => setTimeout(r, 100));
-
-    } catch (err) {
-      console.error(`[Backfill] Failed for ${sub.email}:`, err);
-    }
+  // Process in chunks to speed up but not overwhelm server
+  const chunkSize = 5;
+  for (let i = 0; i < subscribers.length; i += chunkSize) {
+    const chunk = subscribers.slice(i, i + chunkSize);
+    await Promise.all(chunk.map(async (sub) => {
+      try {
+        const count = await processUserHistory(sub.id, sub.email, wsId);
+        historyEntries += count;
+        processed++;
+      } catch (err) {
+        console.error(`[Backfill] Failed for ${sub.email}:`, err);
+      }
+    }));
+    // Tiny delay between chunks
+    await new Promise(r => setTimeout(r, 20));
   }
 
   return {
@@ -309,7 +312,7 @@ export function getSyncStatus(workspaceId: string) {
   return activeJobs[workspaceId] || { status: 'idle', progress: 0, message: '', total: 0, processed: 0 };
 }
 
-export async function startBackgroundBackfill(workspaceId: string, limit: number = 5) {
+export async function startBackgroundBackfill(workspaceId: string, limit: number = 50) {
   // If already running, return current status
   if (activeJobs[workspaceId]?.status === 'running') {
     return activeJobs[workspaceId];
@@ -355,8 +358,8 @@ export async function startBackgroundBackfill(workspaceId: string, limit: number
         }
 
         page++;
-        // Small delay
-        await new Promise(r => setTimeout(r, 200));
+        // Tiny delay
+        await new Promise(r => setTimeout(r, 50));
       }
 
       activeJobs[workspaceId] = {
@@ -427,7 +430,7 @@ export async function startBackgroundSync(workspaceId: string, updatedAfter?: st
           activeJobs[workspaceId].progress = Math.min(100, Math.round((p / totalPages) * 100));
           activeJobs[workspaceId].message = `Syncing batch ${p}/${totalPages}...`;
 
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 50));
         }
       }
 
