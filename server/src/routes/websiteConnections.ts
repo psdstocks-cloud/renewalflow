@@ -39,19 +39,22 @@ websiteConnectionRouter.get('/api/website-connections', async (req, res, next) =
   try {
     const workspaceId = await getWorkspaceId(req);
 
-    const connections = await prisma.websiteConnection.findMany({
-      where: { workspaceId },
-      select: {
-        id: true,
-        websiteUrl: true,
-        apiKey: true,
-        isActive: true,
-        lastSyncAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { withRetry } = await import('../config/db');
+    const connections = await withRetry(() => 
+      prisma.websiteConnection.findMany({
+        where: { workspaceId },
+        select: {
+          id: true,
+          websiteUrl: true,
+          apiKey: true,
+          isActive: true,
+          lastSyncAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
 
     res.json(connections);
   } catch (error) {

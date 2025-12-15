@@ -359,8 +359,9 @@ artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
   }
 });
 
-// Helper to run sync steps in parallel for faster execution (Plan 1: Quick Wins)
-async function runParallelSync(connection: { websiteUrl: string; apiKey: string }) {
+// Helper to run sync steps - uses parallel if connection pool allows, otherwise sequential
+async function runSync(connection: { websiteUrl: string; apiKey: string }) {
+  const { CONNECTION_LIMIT } = await import('../config/db');
   const steps = ['users', 'points', 'charges'];
   const baseUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
   const headers = {
@@ -369,6 +370,63 @@ async function runParallelSync(connection: { websiteUrl: string; apiKey: string 
     'User-Agent': 'RenewalFlow-Backend/1.0',
   };
 
+  // If connection limit is too low, fall back to sequential execution
+  if (CONNECTION_LIMIT < 3) {
+    console.log(`[runSync] Connection limit is ${CONNECTION_LIMIT}, using sequential execution to avoid pool exhaustion`);
+    return runSequentialSync(connection, baseUrl, headers, steps);
+  }
+
+  console.log(`[runSync] Connection limit is ${CONNECTION_LIMIT}, using parallel execution`);
+  return runParallelSync(connection, baseUrl, headers, steps);
+}
+
+// Sequential execution fallback for low connection pools
+async function runSequentialSync(
+  connection: { websiteUrl: string; apiKey: string },
+  baseUrl: string,
+  headers: Record<string, string>,
+  steps: string[]
+) {
+  console.log('[runSequentialSync] Starting background sequential sync...');
+  const results = [];
+
+  for (const step of steps) {
+    try {
+      console.log(`[runSequentialSync] Triggering step: ${step}`);
+      const stepUrl = `${baseUrl}?step=${step}`;
+
+      const response = await fetch(stepUrl, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(600000), // 10 minute timeout per step
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[runSequentialSync] Step ${step} failed: ${response.status} ${errorText}`);
+        results.push({ step, success: false, error: errorText });
+      } else {
+        console.log(`[runSequentialSync] Step ${step} completed successfully`);
+        results.push({ step, success: true });
+      }
+    } catch (error: any) {
+      console.error(`[runSequentialSync] Error executing step ${step}:`, error);
+      results.push({ step, success: false, error: error.message });
+    }
+  }
+
+  const successful = results.filter(r => r.success).length;
+  console.log(`[runSequentialSync] All steps finished. ${successful}/${steps.length} successful.`);
+  return results;
+}
+
+// Parallel execution for adequate connection pools
+async function runParallelSync(
+  connection: { websiteUrl: string; apiKey: string },
+  baseUrl: string,
+  headers: Record<string, string>,
+  steps: string[]
+) {
   console.log('[runParallelSync] Starting background parallel sync...');
 
   // Run all steps in parallel for maximum speed
@@ -414,9 +472,12 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
       return res.status(401).json({ message: 'User not authenticated' });
     }
 
-    const workspaceUser = await prisma.workspaceUser.findFirst({
-      where: { userId: user.id },
-    });
+    const { withRetry } = await import('../config/db');
+    const workspaceUser = await withRetry(() => 
+      prisma.workspaceUser.findFirst({
+        where: { userId: user.id },
+      })
+    );
 
     if (!workspaceUser) {
       return res.status(404).json({ message: 'Workspace not found for user' });
@@ -466,8 +527,9 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
       });
     }
 
-    // 2. Start Background Orchestration (Fire and Forget) - Parallel execution for speed
-    runParallelSync(connection).catch(err => {
+    // 2. Start Background Orchestration (Fire and Forget)
+    // Automatically chooses parallel or sequential based on connection pool size
+    runSync(connection).catch(err => {
       console.error('[artly/sync-all] Background sync error:', err);
     });
 
@@ -492,9 +554,12 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
       return res.status(401).json({ message: 'User not authenticated' });
     }
 
-    const workspaceUser = await prisma.workspaceUser.findFirst({
-      where: { userId: user.id },
-    });
+    const { withRetry } = await import('../config/db');
+    const workspaceUser = await withRetry(() => 
+      prisma.workspaceUser.findFirst({
+        where: { userId: user.id },
+      })
+    );
 
     if (!workspaceUser) {
       return res.status(404).json({ message: 'Workspace not found for user' });

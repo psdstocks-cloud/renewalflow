@@ -6,7 +6,7 @@ export const settingsRouter = Router();
 
 settingsRouter.use(authMiddleware);
 
-import { prisma } from '../config/db';
+import { prisma, withRetry } from '../config/db';
 
 settingsRouter.get('/api/settings', async (req, res, next) => {
   try {
@@ -14,9 +14,11 @@ settingsRouter.get('/api/settings', async (req, res, next) => {
     if (!user || !user.id) {
       return res.status(401).json({ message: 'User not authenticated' });
     }
-    const workspaceUser = await prisma.workspaceUser.findFirst({
-      where: { userId: user.id },
-    });
+    const workspaceUser = await withRetry(() => 
+      prisma.workspaceUser.findFirst({
+        where: { userId: user.id },
+      })
+    );
     // For now, if no workspace found, we might fallback to null (service defaults to findFirst)
     // But better to be consistent. Let's pass undefined if not found?
     // Actually, if a validated user has no workspace, they are in a bad state.
@@ -44,9 +46,11 @@ settingsRouter.put('/api/settings', async (req, res, next) => {
     if (!user || !user.id) {
       return res.status(401).json({ message: 'User not authenticated' });
     }
-    const workspaceUser = await prisma.workspaceUser.findFirst({
-      where: { userId: user.id },
-    });
+    const workspaceUser = await withRetry(() => 
+      prisma.workspaceUser.findFirst({
+        where: { userId: user.id },
+      })
+    );
     const wsId = workspaceUser?.workspaceId;
 
     const settings = await updateSettings(req.body, wsId);

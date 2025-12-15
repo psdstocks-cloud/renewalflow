@@ -31,6 +31,44 @@ if (connectionLimit < 5) {
   console.warn(`[Database] Update your DATABASE_URL to include: ?connection_limit=10 (or higher)`);
 }
 
+// Export connection limit for use in other modules
+export const CONNECTION_LIMIT = connectionLimit;
+
+// Retry wrapper for database operations with connection pool error handling
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
+      
+      // Check if it's a connection pool error
+      const isPoolError = error.message?.includes('connection pool') || 
+                         error.message?.includes('connection_limit') ||
+                         error.message?.includes('Timed out fetching a new connection');
+      
+      if (isPoolError && attempt < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.warn(`[Database] Connection pool error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // Not a pool error or max retries reached
+      throw error;
+    }
+  }
+  
+  throw lastError || new Error('Operation failed after retries');
+}
+
 // Helper function to check database connection
 export async function checkDatabaseConnection(): Promise<boolean> {
   try {
