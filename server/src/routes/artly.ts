@@ -29,7 +29,7 @@ artlyRouter.get('/artly/test', async (req, res) => {
   console.log('[artly/test] Test endpoint called!');
   console.log('[artly/test] Headers:', req.headers);
   console.log('[artly/test] Sending response...');
-  res.json({ 
+  res.json({
     message: 'Test endpoint reached successfully!',
     timestamp: new Date().toISOString(),
     headers: {
@@ -43,11 +43,11 @@ artlyRouter.get('/artly/test', async (req, res) => {
 // Debug endpoint to check API key (NO AUTH - for debugging)
 artlyRouter.get('/artly/debug/key-check', async (req, res) => {
   const apiKey = (req.headers['x-artly-secret'] as string)?.trim();
-  
+
   if (!apiKey) {
     return res.json({ error: 'No x-artly-secret header provided' });
   }
-  
+
   try {
     // Check if key exists in database
     const connection = await prisma.websiteConnection.findUnique({
@@ -59,7 +59,7 @@ artlyRouter.get('/artly/debug/key-check', async (req, res) => {
         workspaceId: true,
       },
     });
-    
+
     // Also check for similar keys
     const similarKeys = await prisma.websiteConnection.findMany({
       where: {
@@ -74,7 +74,7 @@ artlyRouter.get('/artly/debug/key-check', async (req, res) => {
       },
       take: 5,
     });
-    
+
     return res.json({
       providedKey: {
         length: apiKey.length,
@@ -114,7 +114,7 @@ artlyRouter.post('/artly/sync/points-events', artlyAuth, async (req, res, next) 
 
 // Test endpoint to verify route registration (NO AUTH for debugging)
 artlyRouter.post('/artly/sync/points-balances/start/test', async (req, res) => {
-  res.json({ 
+  res.json({
     message: 'Route /artly/sync/points-balances/start is registered',
     timestamp: new Date().toISOString(),
   });
@@ -125,7 +125,7 @@ artlyRouter.post('/artly/sync/points-balances/start', artlyAuth, async (req, res
   try {
     const workspaceId = (req as any).workspaceId;
     const balances = Array.isArray(req.body) ? req.body : [];
-    
+
     console.log('[artly/sync/points-balances/start] ===== ENDPOINT CALLED =====');
     console.log('[artly/sync/points-balances/start] WorkspaceId:', workspaceId);
     console.log('[artly/sync/points-balances/start] Body length:', balances.length);
@@ -133,25 +133,25 @@ artlyRouter.post('/artly/sync/points-balances/start', artlyAuth, async (req, res
       'x-artly-secret': req.headers['x-artly-secret'] ? 'present' : 'missing',
       'content-type': req.headers['content-type'],
     });
-    
+
     // workspaceId should always be set by artlyAuth middleware (or null for legacy mode)
     // If it's undefined, something went wrong with auth
     if (workspaceId === undefined) {
       console.error('[artly/sync/points-balances/start] workspaceId is undefined - auth middleware may have failed');
       return res.status(401).json({ message: 'Unauthorized', error: 'Authentication failed' });
     }
-    
+
     // Create sync job
     const job = createSyncJob('points-balances', workspaceId, balances.length);
-    
+
     console.log('[artly/sync/points-balances/start] Created job:', job.jobId);
-    
+
     // Start async processing (don't await)
     processPointsBalances(balances, workspaceId, job.jobId).catch((error) => {
       console.error('[artly/sync/points-balances/start] Sync error:', error);
       failJob(job.jobId, error.message || 'Unknown error during sync');
     });
-    
+
     // Return jobId immediately
     console.log('[artly/sync/points-balances/start] Returning jobId:', job.jobId);
     res.json({
@@ -169,22 +169,22 @@ artlyRouter.get('/artly/sync/points-balances/status', artlyAuth, async (req, res
   try {
     const workspaceId = (req as any).workspaceId;
     const jobId = req.query.jobId as string;
-    
+
     if (!jobId) {
       return res.status(400).json({ error: 'jobId is required' });
     }
-    
+
     const job = getSyncJob(jobId);
-    
+
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
     }
-    
+
     // Verify job belongs to this workspace
     if (job.workspaceId !== workspaceId) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    
+
     res.json({
       success: true,
       job: {
@@ -210,22 +210,22 @@ artlyRouter.post('/artly/sync/points-balances/cancel', artlyAuth, async (req, re
   try {
     const workspaceId = (req as any).workspaceId;
     const jobId = req.body.jobId as string;
-    
+
     if (!jobId) {
       return res.status(400).json({ error: 'jobId is required' });
     }
-    
+
     const job = getSyncJob(jobId);
-    
+
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
     }
-    
+
     // Verify job belongs to this workspace
     if (job.workspaceId !== workspaceId) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    
+
     // Only cancel if job is still running
     if (job.status !== 'running' && job.status !== 'pending') {
       return res.json({
@@ -237,9 +237,9 @@ artlyRouter.post('/artly/sync/points-balances/cancel', artlyAuth, async (req, re
         },
       });
     }
-    
+
     cancelJob(jobId);
-    
+
     res.json({
       success: true,
       message: 'Job cancellation requested',
@@ -257,7 +257,7 @@ artlyRouter.post('/artly/sync/points-balances', artlyAuth, async (req, res, next
     console.log('[artly/sync/points-balances] Received balance sync request (legacy)');
     console.log('[artly/sync/points-balances] WorkspaceId:', workspaceId);
     console.log('[artly/sync/points-balances] Body length:', Array.isArray(req.body) ? req.body.length : 'not an array');
-    
+
     const result = await processPointsBalances(req.body, workspaceId);
     console.log('[artly/sync/points-balances] Sync completed:', result);
     res.json(result);
@@ -272,7 +272,7 @@ artlyRouter.get('/artly/debug/balances', artlyAuth, async (req, res, next) => {
   try {
     const workspaceId = (req as any).workspaceId;
     const tenantId = workspaceId || 'artly';
-    
+
     // Get wallet snapshots with customer info
     const snapshots = await prisma.walletSnapshot.findMany({
       where: { tenantId },
@@ -288,12 +288,12 @@ artlyRouter.get('/artly/debug/balances', artlyAuth, async (req, res, next) => {
       orderBy: { updatedAt: 'desc' },
       take: 20, // Get top 20 most recently updated
     });
-    
+
     // Get total count
     const totalCount = await prisma.walletSnapshot.count({
       where: { tenantId },
     });
-    
+
     // Get customers with points > 0
     const customersWithPoints = await prisma.walletSnapshot.count({
       where: {
@@ -301,7 +301,7 @@ artlyRouter.get('/artly/debug/balances', artlyAuth, async (req, res, next) => {
         pointsBalance: { gt: 0 },
       },
     });
-    
+
     res.json({
       tenantId,
       workspaceId,
@@ -377,7 +377,7 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
     }
 
     const workspaceId = workspaceUser.workspaceId;
-    
+
     // Get the website connection to find the WordPress site URL
     const connection = await prisma.websiteConnection.findFirst({
       where: { workspaceId },
@@ -385,32 +385,74 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
     });
 
     if (!connection) {
-      return res.status(404).json({ 
-        message: 'No website connection found. Please create a connection in the Integrations tab.' 
+      return res.status(404).json({
+        message: 'No website connection found. Please create a connection in the Integrations tab.'
       });
     }
 
     // Call WordPress plugin endpoint
     const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
-    
-    const response = await fetch(wpUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-artly-secret': connection.apiKey,
-      },
-    });
+
+    console.log('[artly/sync-all] Calling WordPress endpoint:', wpUrl);
+
+    let response;
+    try {
+      response = await fetch(wpUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-artly-secret': connection.apiKey,
+          'User-Agent': 'RenewalFlow-Backend/1.0',
+        },
+        signal: AbortSignal.timeout(300000), // 5 minute timeout
+      });
+    } catch (fetchError: any) {
+      console.error('[artly/sync-all] Fetch error:', fetchError.message);
+      console.error('[artly/sync-all] Error details:', {
+        name: fetchError.name,
+        cause: fetchError.cause,
+        url: wpUrl,
+      });
+
+      // Check for specific error types
+      if (fetchError.name === 'AbortError' || fetchError.message?.includes('timeout')) {
+        return res.status(504).json({
+          message: 'WordPress sync request timed out. The sync may still be running. Please check progress.',
+          error: 'Request timeout after 5 minutes'
+        });
+      }
+
+      if (fetchError.message?.includes('ECONNREFUSED') || fetchError.message?.includes('ENOTFOUND')) {
+        return res.status(503).json({
+          message: 'Cannot connect to WordPress site. Please check the website URL and ensure the site is accessible.',
+          error: fetchError.message
+        });
+      }
+
+      if (fetchError.message?.includes('certificate') || fetchError.message?.includes('SSL')) {
+        return res.status(502).json({
+          message: 'SSL certificate error when connecting to WordPress site. Please check the website URL.',
+          error: fetchError.message
+        });
+      }
+
+      return res.status(500).json({
+        message: 'Failed to connect to WordPress site',
+        error: fetchError.message || 'fetch failed'
+      });
+    }
 
     if (!response.ok) {
-      const errorText = await response.text();
-      return res.status(response.status).json({ 
-        message: 'WordPress sync failed', 
-        error: errorText 
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error('[artly/sync-all] WordPress returned error:', response.status, errorText);
+      return res.status(response.status).json({
+        message: 'WordPress sync failed',
+        error: errorText
       });
     }
 
     const results = await response.json();
-    
+
     res.json({
       success: true,
       message: 'Full sync completed',
@@ -443,14 +485,14 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
     }
 
     const workspaceId = workspaceUser.workspaceId;
-    
+
     const connection = await prisma.websiteConnection.findFirst({
       where: { workspaceId },
       select: { websiteUrl: true, apiKey: true },
     });
 
     if (!connection) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: 'No website connection found',
         status: 'idle'
       });
@@ -458,24 +500,32 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
 
     // Call WordPress plugin progress endpoint
     const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all/progress`;
-    
-    const response = await fetch(wpUrl, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-artly-secret': connection.apiKey,
-      },
-    });
 
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        message: 'Failed to get progress',
-        status: 'idle'
+    try {
+      const response = await fetch(wpUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-artly-secret': connection.apiKey,
+          'User-Agent': 'RenewalFlow-Backend/1.0',
+        },
+        signal: AbortSignal.timeout(10000), // 10s timeout for status
       });
-    }
 
-    const progress = await response.json();
-    res.json(progress);
+      if (!response.ok) {
+        return res.status(response.status).json({
+          message: 'Failed to get progress',
+          status: 'idle'
+        });
+      }
+
+      const progress = await response.json();
+      res.json(progress);
+    } catch (fetchError: any) {
+      console.error('[artly/sync-all/progress] Fetch error:', fetchError.message);
+      // Return idle status if we can't connect, so frontend doesn't crash
+      res.json({ status: 'idle', message: 'Connection failed' });
+    }
   } catch (error: any) {
     console.error('[artly/sync-all/progress] Error:', error);
     res.json({ status: 'idle' });
