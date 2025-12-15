@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Artly Reminder Bridge
  * Description: Syncs WooCommerce Points & Rewards and Subscriptions data into the Artly Reminder Engine with cron and manual sync.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Artly
  */
 
@@ -227,6 +227,18 @@ function artly_register_sync_route()
     'callback' => 'artly_handle_sync_request',
     'permission_callback' => '__return_true', // Validation inside handler for simpler auth
   ));
+
+  // Full sync endpoint (v1.2.0) - triggers all syncs (users, points, charges)
+  register_rest_route('artly/v1', '/sync-all', array(
+    'methods' => 'POST',
+    'callback' => 'artly_handle_full_sync_request',
+    'permission_callback' => function() {
+      // Check for API key in header
+      $api_key = isset($_SERVER['HTTP_X_ARTLY_SECRET']) ? $_SERVER['HTTP_X_ARTLY_SECRET'] : '';
+      $stored_secret = get_option(ARB_ENGINE_SECRET_OPTION);
+      return !empty($api_key) && $api_key === $stored_secret;
+    },
+  ));
 }
 
 function artly_handle_sync_request(WP_REST_Request $request)
@@ -373,6 +385,56 @@ function artly_handle_sync_request(WP_REST_Request $request)
       'total_users' => $total_users_count['total_users']
     )
   ), 200);
+}
+
+function artly_handle_full_sync_request(WP_REST_Request $request)
+{
+  // Verify API key
+  $api_key = $request->get_header('x-artly-secret');
+  $stored_secret = get_option(ARB_ENGINE_SECRET_OPTION);
+  
+  if (empty($api_key) || $api_key !== $stored_secret) {
+    return new WP_Error('unauthorized', 'Invalid API key', array('status' => 401));
+  }
+
+  $results = array(
+    'users' => null,
+    'points' => null,
+    'charges' => null,
+  );
+
+  // Sync Users
+  try {
+    artly_reminder_bridge_log('Starting full sync: Users');
+    $results['users'] = artly_sync_users_from_woo();
+    artly_reminder_bridge_log('Full sync: Users completed');
+  } catch (Exception $e) {
+    artly_reminder_bridge_log('Full sync: Users error - ' . $e->getMessage());
+    $results['users'] = array('success' => false, 'message' => $e->getMessage());
+  }
+
+  // Sync Points
+  try {
+    artly_reminder_bridge_log('Starting full sync: Points');
+    $results['points'] = artly_sync_points_balances_from_woo();
+    artly_reminder_bridge_log('Full sync: Points completed');
+  } catch (Exception $e) {
+    artly_reminder_bridge_log('Full sync: Points error - ' . $e->getMessage());
+    $results['points'] = array('success' => false, 'message' => $e->getMessage());
+  }
+
+  // Sync Charges
+  try {
+    artly_reminder_bridge_log('Starting full sync: Charges');
+    $results['charges'] = artly_sync_charges_from_woo();
+    artly_reminder_bridge_log('Full sync: Charges completed');
+  } catch (Exception $e) {
+    artly_reminder_bridge_log('Full sync: Charges error - ' . $e->getMessage());
+    $results['charges'] = array('success' => false, 'message' => $e->getMessage());
+  }
+
+  artly_reminder_bridge_log('Full sync completed');
+  return new WP_REST_Response($results, 200);
 }
 
 // --- End Custom Sync ---
@@ -1441,7 +1503,8 @@ function artly_reminder_bridge_handle_post(): ?string
     return __('You do not have permission to manage this page.', 'artly-reminder-bridge');
   }
 
-  if (!isset($_POST['artly_reminder_bridge_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['artly_reminder_bridge_nonce'])), 'artly_reminder_bridge_save')) {
+  $nonce = isset($_POST['artly_reminder_bridge_nonce']) ? $_POST['artly_reminder_bridge_nonce'] : (isset($_POST['artly_reminder_bridge_nonce_manual']) ? $_POST['artly_reminder_bridge_nonce_manual'] : '');
+  if (empty($nonce) || !wp_verify_nonce(sanitize_text_field(wp_unslash($nonce)), 'artly_reminder_bridge_save')) {
     return __('Security check failed.', 'artly-reminder-bridge');
   }
 
@@ -1666,7 +1729,7 @@ function artly_reminder_bridge_render_admin_page(): void
           </div>
         </div>
         <form method="post" class="artly-reminder-manual-form">
-          <?php wp_nonce_field('artly_reminder_bridge_save', 'artly_reminder_bridge_nonce'); ?>
+          <?php wp_nonce_field('artly_reminder_bridge_save', 'artly_reminder_bridge_nonce_manual'); ?>
           <div class="artly-reminder-manual-grid">
             <div class="artly-reminder-manual-item">
               <div class="artly-reminder-manual-text">
@@ -2143,7 +2206,7 @@ function artly_reminder_bridge_render_admin_page(): void
     </style>
     <script>
        (function () {
-          const syncBtn = docu      ment.getElementById('artly-sync-points-btn');
+          const syncBtn = document.getElementById('artly-sync-points-btn');
           const cancelBtn = document.getElementById('artly-cancel-sync-btn');
           const progressDiv = document.getElementById('artly-sync-progress');
           const progressMessage = document.getElementById('artly-progress-message');

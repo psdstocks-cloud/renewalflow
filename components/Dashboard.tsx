@@ -273,44 +273,105 @@ const Dashboard: React.FC = () => {
   const handleSyncWoo = async () => {
     setIsSyncingWoo(true);
     setSyncLog('Starting sync...');
+    
     try {
-      // Step 1: Fetch Page 1 to get total pages
-      let totalCreated = 0;
-      let totalUpdated = 0;
+      // Check if we have a website connection (plugin-based sync)
+      if (connections.length > 0) {
+        // Use plugin-based unified sync (users, points, charges)
+        setSyncLog('Syncing via WordPress plugin (users, points, charges)...');
+        const res = await apiFetch<{
+          success: boolean;
+          message: string;
+          results: {
+            users: any;
+            points: any;
+            charges: any;
+          };
+        }>('/artly/sync-all', { method: 'POST' });
 
-      setSyncLog(`Syncing page 1...`);
-      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
-
-      totalCreated += firstRes.created;
-      totalUpdated += firstRes.updated;
-      const totalPages = firstRes.totalPages;
-      const totalUsers = firstRes.totalUsers;
-
-      if (totalPages > 1) {
-        for (let p = 2; p <= totalPages; p++) {
-          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
-          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
-          totalCreated += res.created;
-          totalUpdated += res.updated;
+        if (res.success) {
+          const { users, points, charges } = res.results;
+          let logMessage = '✅ Full sync completed!\n\n';
+          
+          if (users?.success) {
+            const userMsg = users.message || 'Synced';
+            const userCount = users.count || 0;
+            logMessage += `👥 Users: ${userMsg}${userCount > 0 ? ` (${userCount} users)` : ''}\n`;
+          } else {
+            logMessage += `👥 Users: ❌ ${users?.message || 'Failed'}\n`;
+          }
+          
+          if (points?.success) {
+            const pointsMsg = points.message || 'Synced';
+            const pointsCount = points.count || 0;
+            logMessage += `⭐ Points: ${pointsMsg}${pointsCount > 0 ? ` (${pointsCount} balances)` : ''}\n`;
+          } else {
+            logMessage += `⭐ Points: ❌ ${points?.message || 'Failed'}\n`;
+          }
+          
+          if (charges?.success) {
+            const chargesMsg = charges.message || 'Synced';
+            const chargesCount = charges.count || 0;
+            logMessage += `💳 Charges: ${chargesMsg}${chargesCount > 0 ? ` (${chargesCount} orders)` : ''}\n`;
+          } else {
+            logMessage += `💳 Charges: ❌ ${charges?.message || 'Failed'}\n`;
+          }
+          
+          setSyncLog(logMessage);
+          
+          // Update last sync time
+          const now = new Date().toISOString();
+          const newWooSettings = { ...wooSettings, lastSync: now };
+          await apiFetch('/api/settings', {
+            method: 'PUT',
+            body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
+          });
+          setWooSettings(newWooSettings);
+        } else {
+          setSyncLog(`Error: ${res.message || 'Sync failed'}`);
         }
+      } else {
+        // Fallback to old WooCommerce API sync (if no plugin connection)
+        setSyncLog('No plugin connection found. Using WooCommerce API sync...');
+        
+        // Step 1: Fetch Page 1 to get total pages
+        let totalCreated = 0;
+        let totalUpdated = 0;
+
+        setSyncLog(`Syncing page 1...`);
+        const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
+
+        totalCreated += firstRes.created;
+        totalUpdated += firstRes.updated;
+        const totalPages = firstRes.totalPages;
+        const totalUsers = firstRes.totalUsers;
+
+        if (totalPages > 1) {
+          for (let p = 2; p <= totalPages; p++) {
+            setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
+            const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
+            totalCreated += res.created;
+            totalUpdated += res.updated;
+          }
+        }
+
+        setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
+
+        // Update last sync time
+        const now = new Date().toISOString();
+        const newWooSettings = { ...wooSettings, lastSync: now };
+        await apiFetch('/api/settings', {
+          method: 'PUT',
+          body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
+        });
+        setWooSettings(newWooSettings);
       }
 
-      setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
-
-      // Update last sync time
-      const now = new Date().toISOString();
-      const newWooSettings = { ...wooSettings, lastSync: now };
-      await apiFetch('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
-      });
-      setWooSettings(newWooSettings);
-
       loadSubscribers(subPage, searchQuery); // Refresh the table
-      loadInitialData(); // Refresh stats as well // Actually redundant if we updated settings manually, but good for stats
+      loadInitialData(); // Refresh stats as well
     } catch (err: any) {
       console.error(err);
-      setSyncLog(`Error: ${err.message}`);
+      setSyncLog(`Error: ${err.message || 'Sync failed'}`);
     } finally {
       setIsSyncingWoo(false);
     }

@@ -357,3 +357,56 @@ artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
     next(error);
   }
 });
+
+// Full sync endpoint - triggers all syncs (users, points, charges) via WordPress plugin
+artlyRouter.post('/artly/sync-all', artlyAuth, async (req, res, next) => {
+  try {
+    const workspaceId = (req as any).workspaceId;
+    
+    // Get the website connection to find the WordPress site URL
+    const connection = await prisma.websiteConnection.findFirst({
+      where: { workspaceId },
+      select: { websiteUrl: true, apiKey: true },
+    });
+
+    if (!connection) {
+      return res.status(404).json({ 
+        message: 'No website connection found. Please create a connection in the Integrations tab.' 
+      });
+    }
+
+    // Call WordPress plugin endpoint
+    const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
+    
+    const response = await fetch(wpUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-artly-secret': connection.apiKey,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ 
+        message: 'WordPress sync failed', 
+        error: errorText 
+      });
+    }
+
+    const results = await response.json();
+    
+    res.json({
+      success: true,
+      message: 'Full sync completed',
+      results: {
+        users: results.users,
+        points: results.points,
+        charges: results.charges,
+      },
+    });
+  } catch (error: any) {
+    console.error('[artly/sync-all] Error:', error);
+    next(error);
+  }
+});
