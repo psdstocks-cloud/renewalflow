@@ -9,6 +9,25 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
 
   const message = err instanceof Error ? err.message : 'Internal Server Error';
   
+  // Check if it's a connection pool timeout error
+  if (err instanceof Error && (err.message?.includes('connection pool') || err.message?.includes('connection_limit'))) {
+    const dbUrl = process.env.DATABASE_URL || '';
+    const connectionLimitMatch = dbUrl.match(/connection_limit=(\d+)/i);
+    const connectionLimit = connectionLimitMatch ? parseInt(connectionLimitMatch[1], 10) : null;
+    
+    console.error('[ErrorHandler] Connection pool timeout detected');
+    console.error(`[ErrorHandler] Current connection_limit: ${connectionLimit || 'not specified (defaults to 1)'}`);
+    
+    return res.status(503).json({
+      message: 'Database connection pool exhausted',
+      error: 'Too many concurrent database requests. The connection pool is too small for parallel operations.',
+      solution: 'Update your DATABASE_URL to increase connection_limit. For parallel sync operations, use: ?connection_limit=10 (or higher)',
+      currentLimit: connectionLimit || 1,
+      recommendedLimit: 10,
+      details: 'With parallel sync execution, multiple database connections are needed simultaneously. Increase connection_limit in your Railway/Supabase environment variables.'
+    });
+  }
+  
   // Check if it's a database connection error
   if (err instanceof Error && err.message?.includes("Can't reach database server")) {
     const dbUrl = process.env.DATABASE_URL || '';

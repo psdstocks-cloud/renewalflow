@@ -1,12 +1,35 @@
 import { PrismaClient } from '@prisma/client';
 import { env } from './env';
 
-// Create PrismaClient instance with proper logging
+// Parse connection limit from DATABASE_URL if present
+function getConnectionLimit(): number {
+  const dbUrl = env.DATABASE_URL;
+  const connectionLimitMatch = dbUrl.match(/connection_limit=(\d+)/i);
+  if (connectionLimitMatch) {
+    return parseInt(connectionLimitMatch[1], 10);
+  }
+  // Default to 10 if not specified (for parallel execution support)
+  return 10;
+}
+
+// Create PrismaClient instance with proper logging and connection pool configuration
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' 
     ? [{ emit: 'event', level: 'query' }, { emit: 'stdout', level: 'error' }, { emit: 'stdout', level: 'warn' }]
     : [{ emit: 'stdout', level: 'error' }],
+  datasources: {
+    db: {
+      url: env.DATABASE_URL,
+    },
+  },
 });
+
+// Check and warn about connection pool settings
+const connectionLimit = getConnectionLimit();
+if (connectionLimit < 5) {
+  console.warn(`[Database] ⚠️  Connection pool limit is ${connectionLimit}. For parallel sync operations, consider increasing it to at least 5.`);
+  console.warn(`[Database] Update your DATABASE_URL to include: ?connection_limit=10 (or higher)`);
+}
 
 // Helper function to check database connection
 export async function checkDatabaseConnection(): Promise<boolean> {
