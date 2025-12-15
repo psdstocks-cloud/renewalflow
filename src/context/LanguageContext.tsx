@@ -29,6 +29,7 @@ export const translations = {
         'active_subscribers': 'Active Subscribers',
         'churn_risk': 'Churn Risk',
         'revenue_recovered': 'Revenue Recovered',
+        'revenue': 'Revenue',
     },
     ar: {
         'dashboard': 'الرئيسية',
@@ -47,6 +48,7 @@ export const translations = {
         'active_subscribers': 'مشتركين نشطين',
         'churn_risk': 'خطر الإلغاء',
         'revenue_recovered': 'دخل تم إنقاذه',
+        'revenue': 'الإيرادات',
     }
 };
 

@@ -15,6 +15,7 @@ import { SettingsView } from '@/src/components/dashboard/SettingsView';
 import { IntegrationsView } from '@/src/components/dashboard/IntegrationsView';
 import { EditSubscriberModal } from '@/src/components/dashboard/EditSubscriberModal';
 import { PointsFlowChart, RetentionForecastChart } from '@/src/components/dashboard/ChartComponents';
+import { RevenueView } from '@/src/components/dashboard/RevenueView';
 
 // Types
 import {
@@ -514,6 +515,12 @@ const Dashboard: React.FC = () => {
               onSyncRecent={handleSyncRecent}
               isSyncingRecent={isSyncingRecent}
             />
+          )
+        }
+
+        {
+          activeTab === 'revenue' && (
+            <RevenueView />
           )
         }
 

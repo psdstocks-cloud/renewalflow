@@ -122,3 +122,47 @@ export interface WebsiteConnection {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface RevenueTransaction {
+  id: string;
+  workspaceId: string;
+  subscriberId: string;
+  amount: number;
+  currency: string;
+  transactionType: 'renewal' | 'new_purchase' | 'upgrade' | 'downgrade' | 'refund';
+  paymentMethod: string | null;
+  paymentStatus: string;
+  emailLogId: string | null;
+  externalOrderId: string | null;
+  externalChargeId: string | null;
+  planName: string | null;
+  planAmount: number | null;
+  transactionDate: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RevenueMetrics {
+  totalRevenue: number;
+  transactionCount: number;
+  recoveredRevenue: number;
+  mrr: number;
+  arr: number;
+  churnLost: number;
+  forecast: number;
+  byPlan: Array<{ planName: string; revenue: number; transactionCount: number }>;
+  byPaymentMethod: Array<{ paymentMethod: string; revenue: number; transactionCount: number }>;
+  period: { start: string; end: string };
+}
+
+export interface RevenueByPlan {
+  planName: string;
+  totalRevenue: number;
+  transactionCount: number;
+}
+
+export interface RevenueByPaymentMethod {
+  paymentMethod: string;
+  totalRevenue: number;
+  transactionCount: number;
+}

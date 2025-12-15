@@ -29,6 +29,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         { id: 'action', label: 'action_center', icon: 'fa-bolt' },
         { id: 'overview', label: 'overview', icon: 'fa-chart-pie' },
         { id: 'subscribers', label: 'subscribers', icon: 'fa-users' },
+        { id: 'revenue', label: 'revenue', icon: 'fa-dollar-sign' },
         { id: 'logs', label: 'email_logs', icon: 'fa-history' },
         { id: 'integrations', label: 'integrations', icon: 'fa-plug' },
         { id: 'settings', label: 'settings', icon: 'fa-cog' },

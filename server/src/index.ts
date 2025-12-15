@@ -15,6 +15,7 @@ import webhookRouter from './routes/webhookRoutes';
 import { startCronJobs } from './services/cronScheduler';
 import { checkDatabaseConnection } from './config/db';
 import { reportsRouter } from './routes/reports';
+import { revenueRouter } from './routes/revenue';
 
 const app = express();
 
@@ -91,6 +92,7 @@ app.use(reminderRouter);
 app.use(wooRouter);
 app.use(cronRouter);
 app.use(reportsRouter);
+app.use(revenueRouter);
 
 // Log registered routes for debugging
 console.log('[Routes] Registered artlyRouter');
