@@ -1,11 +1,33 @@
 import { NextFunction, Request, Response } from 'express';
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+// Helper to set CORS headers
+function setCorsHeaders(res: Response, origin?: string) {
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://renewalflow.pages.dev',
+    process.env.FRONTEND_ORIGIN || '',
+  ].filter(Boolean);
+
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (allowedOrigins.length > 0) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigins[0]);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-cron-key, x-admin-api-key, x-artly-secret');
+}
+
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   console.error('[ErrorHandler]', err);
   
   if (res.headersSent) {
     return;
   }
+
+  // Set CORS headers before sending error response
+  setCorsHeaders(res, req.headers.origin);
 
   const message = err instanceof Error ? err.message : 'Internal Server Error';
   

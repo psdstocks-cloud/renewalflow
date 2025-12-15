@@ -401,12 +401,27 @@ const Dashboard: React.FC = () => {
             }
           } catch (err: any) {
             console.error('Progress poll error:', err);
-            // Continue polling on error (retry)
+            
+            // Handle 502 errors gracefully - don't stop polling immediately
+            if (err.message?.includes('502') || err.message?.includes('failed to fetch')) {
+              // Continue polling but log the error
+              console.warn('Progress endpoint temporarily unavailable, retrying...');
+              pollCount++;
+              
+              // Only stop after multiple consecutive failures
+              if (pollCount >= maxPolls) {
+                setSyncLog('Sync progress unavailable. The sync may still be running in the background. Check WordPress admin for details.');
+                if (pollInterval) { clearInterval(pollInterval); }
+                setIsSyncingWoo(false);
+                setTimeout(() => setSyncProgress(undefined), 2000);
+              }
+              return;
+            }
+            
+            // For other errors, continue polling
             pollCount++;
             if (pollCount >= maxPolls) {
-              if (pollInterval) {
-                clearInterval(pollInterval);
-              }
+              if (pollInterval) { clearInterval(pollInterval); }
               setIsSyncingWoo(false);
               setTimeout(() => setSyncProgress(undefined), 2000);
             }

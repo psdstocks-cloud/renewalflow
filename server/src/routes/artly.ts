@@ -486,10 +486,12 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
     const workspaceId = workspaceUser.workspaceId;
 
     // Get the website connection to find the WordPress site URL
-    const connection = await prisma.websiteConnection.findFirst({
-      where: { workspaceId },
-      select: { websiteUrl: true, apiKey: true },
-    });
+    const connection = await withRetry(() =>
+      prisma.websiteConnection.findFirst({
+        where: { workspaceId },
+        select: { websiteUrl: true, apiKey: true },
+      })
+    );
 
     if (!connection) {
       return res.status(404).json({
@@ -562,27 +564,37 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
     );
 
     if (!workspaceUser) {
-      return res.status(404).json({ message: 'Workspace not found for user' });
+      // Return 200 with idle status to prevent CORS issues
+      return res.status(200).json({ 
+        status: 'idle',
+        message: 'Workspace not found for user'
+      });
     }
 
     const workspaceId = workspaceUser.workspaceId;
 
-    const connection = await prisma.websiteConnection.findFirst({
-      where: { workspaceId },
-      select: { websiteUrl: true, apiKey: true },
-    });
+    const connection = await withRetry(() =>
+      prisma.websiteConnection.findFirst({
+        where: { workspaceId },
+        select: { websiteUrl: true, apiKey: true },
+      })
+    );
 
     if (!connection) {
-      return res.status(404).json({
-        message: 'No website connection found',
-        status: 'idle'
+      // Return 200 with idle status to prevent CORS issues
+      return res.status(200).json({
+        status: 'idle',
+        message: 'No website connection found'
       });
     }
 
-    // Call WordPress plugin progress endpoint
+    // Call WordPress plugin progress endpoint with shorter timeout
     const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all/progress`;
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
       const response = await fetch(wpUrl, {
         method: 'GET',
         headers: {
@@ -590,13 +602,15 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
           'x-artly-secret': connection.apiKey,
           'User-Agent': 'RenewalFlow-Backend/1.0',
         },
-        signal: AbortSignal.timeout(10000), // 10s timeout for status
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
-        return res.status(response.status).json({
-          message: 'Failed to get progress',
-          status: 'idle'
+        return res.status(200).json({ // Return 200 with idle status instead of error
+          status: 'idle',
+          message: 'Sync not running or WordPress site unavailable'
         });
       }
 
@@ -605,10 +619,19 @@ artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, nex
     } catch (fetchError: any) {
       console.error('[artly/sync-all/progress] Fetch error:', fetchError.message);
       // Return idle status if we can't connect, so frontend doesn't crash
-      res.json({ status: 'idle', message: 'Connection failed' });
+      return res.status(200).json({ 
+        status: 'idle', 
+        message: 'Unable to reach WordPress site',
+        error: fetchError.message 
+      });
     }
   } catch (error: any) {
     console.error('[artly/sync-all/progress] Error:', error);
-    res.json({ status: 'idle' });
+    // Always return 200 with idle status to prevent frontend errors
+    res.status(200).json({ 
+      status: 'idle',
+      message: 'Error checking progress',
+      error: error.message 
+    });
   }
 });
