@@ -359,7 +359,47 @@ artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
   }
 });
 
-// Full sync endpoint - triggers all syncs (users, points, charges) via WordPress plugin
+// Helper to run sync steps sequentially in background
+async function runSequentialSync(connection: { websiteUrl: string; apiKey: string }) {
+  const steps = ['users', 'points', 'charges'];
+  const baseUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-artly-secret': connection.apiKey,
+    'User-Agent': 'RenewalFlow-Backend/1.0',
+  };
+
+  console.log('[runSequentialSync] Starting background sequential sync...');
+
+  for (const step of steps) {
+    try {
+      console.log(`[runSequentialSync] Triggering step: ${step}`);
+      const stepUrl = `${baseUrl}?step=${step}`;
+
+      const response = await fetch(stepUrl, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(600000), // 10 minute timeout per step
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[runSequentialSync] Step ${step} failed: ${response.status} ${errorText}`);
+        // We continue to next step? Or stop? 
+        // If users fail, points might fail too. But let's try to continue to be resilient? 
+        // Actually, usually better to stop if a dependency fails. But here they are somewhat independent.
+        // Let's continue but log error. The WP side also records the error in the option.
+      } else {
+        console.log(`[runSequentialSync] Step ${step} completed successfully`);
+      }
+    } catch (error: any) {
+      console.error(`[runSequentialSync] Error executing step ${step}:`, error);
+    }
+  }
+  console.log('[runSequentialSync] All steps finished.');
+}
+
+// Full sync endpoint - Triggers background sequential sync
 artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
   try {
     // Get workspaceId from authenticated user
@@ -390,78 +430,48 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
       });
     }
 
-    // Call WordPress plugin endpoint
-    const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
+    // 1. Initialize Sync on WordPress (Reset progress)
+    const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all?step=init`;
+    console.log('[artly/sync-all] Initializing sync:', wpUrl);
 
-    console.log('[artly/sync-all] Calling WordPress endpoint:', wpUrl);
-
-    let response;
     try {
-      response = await fetch(wpUrl, {
+      const initResponse = await fetch(wpUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-artly-secret': connection.apiKey,
           'User-Agent': 'RenewalFlow-Backend/1.0',
         },
-        signal: AbortSignal.timeout(300000), // 5 minute timeout
-      });
-    } catch (fetchError: any) {
-      console.error('[artly/sync-all] Fetch error:', fetchError.message);
-      console.error('[artly/sync-all] Error details:', {
-        name: fetchError.name,
-        cause: fetchError.cause,
-        url: wpUrl,
+        signal: AbortSignal.timeout(30000), // 30s timeout for init
       });
 
-      // Check for specific error types
-      if (fetchError.name === 'AbortError' || fetchError.message?.includes('timeout')) {
-        return res.status(504).json({
-          message: 'WordPress sync request timed out. The sync may still be running. Please check progress.',
-          error: 'Request timeout after 5 minutes'
+      if (!initResponse.ok) {
+        const errorText = await initResponse.text();
+        return res.status(initResponse.status).json({
+          message: 'Failed to initialize sync on WordPress',
+          error: errorText
         });
       }
-
-      if (fetchError.message?.includes('ECONNREFUSED') || fetchError.message?.includes('ENOTFOUND')) {
-        return res.status(503).json({
-          message: 'Cannot connect to WordPress site. Please check the website URL and ensure the site is accessible.',
-          error: fetchError.message
-        });
-      }
-
-      if (fetchError.message?.includes('certificate') || fetchError.message?.includes('SSL')) {
-        return res.status(502).json({
-          message: 'SSL certificate error when connecting to WordPress site. Please check the website URL.',
-          error: fetchError.message
-        });
-      }
-
-      return res.status(500).json({
-        message: 'Failed to connect to WordPress site',
-        error: fetchError.message || 'fetch failed'
+    } catch (initError: any) {
+      console.error('[artly/sync-all] Init failed:', initError);
+      return res.status(502).json({
+        message: 'Failed to contact WordPress site',
+        error: initError.message
       });
     }
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.error('[artly/sync-all] WordPress returned error:', response.status, errorText);
-      return res.status(response.status).json({
-        message: 'WordPress sync failed',
-        error: errorText
-      });
-    }
+    // 2. Start Background Orchestration (Fire and Forget)
+    runSequentialSync(connection).catch(err => {
+      console.error('[artly/sync-all] Background sync error:', err);
+    });
 
-    const results = await response.json();
-
+    // 3. Return immediately
     res.json({
       success: true,
-      message: 'Full sync completed',
-      results: {
-        users: results.users,
-        points: results.points,
-        charges: results.charges,
-      },
+      message: 'Full sync started in background',
+      status: 'started'
     });
+
   } catch (error: any) {
     console.error('[artly/sync-all] Error:', error);
     next(error);
