@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { artlyAuth } from '../middleware/artlyAuth';
+import { authMiddleware } from '../middleware/auth';
 import {
   processPointsEvents,
   processPointsBalances,
@@ -359,9 +360,23 @@ artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
 });
 
 // Full sync endpoint - triggers all syncs (users, points, charges) via WordPress plugin
-artlyRouter.post('/artly/sync-all', artlyAuth, async (req, res, next) => {
+artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
   try {
-    const workspaceId = (req as any).workspaceId;
+    // Get workspaceId from authenticated user
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
+
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
+
+    const workspaceId = workspaceUser.workspaceId;
     
     // Get the website connection to find the WordPress site URL
     const connection = await prisma.websiteConnection.findFirst({
