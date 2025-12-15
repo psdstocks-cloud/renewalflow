@@ -275,14 +275,14 @@ const Dashboard: React.FC = () => {
     setIsSyncingWoo(true);
     setSyncProgress(0);
     setSyncLog('Starting sync...');
-    
+
     try {
       // Check if we have a website connection (plugin-based sync)
       if (connections.length > 0) {
         // Start sync in background (don't wait for response)
         setSyncLog('Starting full sync...');
         setSyncProgress(1);
-        
+
         // Start the sync in background
         apiFetch('/artly/sync-all', { method: 'POST' }).catch(err => {
           console.error('Sync start error:', err);
@@ -290,9 +290,9 @@ const Dashboard: React.FC = () => {
 
         // Poll for progress
         let pollCount = 0;
-        const maxPolls = 600; // 10 minutes max (600 * 1 second)
+        const maxPolls = 1800; // 60 minutes max (1800 * 2 seconds)
         let pollInterval: NodeJS.Timeout | null = null;
-        
+
         const pollProgress = async () => {
           try {
             const progress = await apiFetch<{
@@ -312,28 +312,28 @@ const Dashboard: React.FC = () => {
                 // Get final results
                 const { users, points, charges } = progress;
                 let logMessage = '✅ Full sync completed!\n\n';
-                
+
                 if (users?.status === 'completed') {
                   logMessage += `👥 Users: ${users.message || 'Synced'} (${users.processed || 0} users)\n`;
                 } else if (users?.status === 'error') {
                   logMessage += `👥 Users: ❌ ${users.message || 'Failed'}\n`;
                 }
-                
+
                 if (points?.status === 'completed') {
                   logMessage += `⭐ Points: ${points.message || 'Synced'} (${points.processed || 0} balances)\n`;
                 } else if (points?.status === 'error') {
                   logMessage += `⭐ Points: ❌ ${points.message || 'Failed'}\n`;
                 }
-                
+
                 if (charges?.status === 'completed') {
                   logMessage += `💳 Charges: ${charges.message || 'Synced'} (${charges.processed || 0} orders)\n`;
                 } else if (charges?.status === 'error') {
                   logMessage += `💳 Charges: ❌ ${charges.message || 'Failed'}\n`;
                 }
-                
+
                 setSyncLog(logMessage);
                 setSyncProgress(100);
-                
+
                 // Update last sync time
                 const now = new Date().toISOString();
                 const newWooSettings = { ...wooSettings, lastSync: now };
@@ -343,7 +343,7 @@ const Dashboard: React.FC = () => {
                 });
                 setWooSettings(newWooSettings);
               }
-              
+
               if (pollInterval) {
                 clearInterval(pollInterval);
               }
@@ -361,14 +361,14 @@ const Dashboard: React.FC = () => {
 
             const currentStepName = stepNames[progress.current_step] || progress.current_step;
             const currentStepData = progress[progress.current_step as keyof typeof progress] as any;
-            
+
             // Update progress percentage
             const overallProgress = Math.round(progress.overall_progress || 0);
             setSyncProgress(overallProgress);
-            
+
             let progressMessage = `Syncing ${currentStepName}...\n`;
             progressMessage += `Overall: ${overallProgress}% (Step ${progress.completed_steps + 1}/${progress.total_steps})\n`;
-            
+
             if (currentStepData?.processed !== undefined && currentStepData?.total !== undefined) {
               progressMessage += `${currentStepData.processed}/${currentStepData.total} items`;
             }
@@ -379,7 +379,7 @@ const Dashboard: React.FC = () => {
               const elapsed = (Date.now() - startTime) / 1000; // seconds
               const rate = overallProgress / elapsed; // % per second
               const remaining = (100 - overallProgress) / rate; // seconds remaining
-              
+
               if (remaining > 0 && remaining < 3600) {
                 const mins = Math.floor(remaining / 60);
                 const secs = Math.floor(remaining % 60);
@@ -413,49 +413,49 @@ const Dashboard: React.FC = () => {
           }
         };
 
-        // Start polling after a short delay, then every 1 second
+        // Start polling after a short delay, then every 2 seconds
         setTimeout(() => {
           pollProgress();
-          pollInterval = setInterval(pollProgress, 1000);
+          pollInterval = setInterval(pollProgress, 2000);
         }, 500);
-        
+
         // Store interval reference for cleanup
         (window as any).__syncPollInterval = pollInterval;
       } else {
         // Fallback to old WooCommerce API sync (if no plugin connection)
         setSyncLog('No plugin connection found. Using WooCommerce API sync...');
-        
-      // Step 1: Fetch Page 1 to get total pages
-      let totalCreated = 0;
-      let totalUpdated = 0;
 
-      setSyncLog(`Syncing page 1...`);
-      const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
+        // Step 1: Fetch Page 1 to get total pages
+        let totalCreated = 0;
+        let totalUpdated = 0;
 
-      totalCreated += firstRes.created;
-      totalUpdated += firstRes.updated;
-      const totalPages = firstRes.totalPages;
-      const totalUsers = firstRes.totalUsers;
+        setSyncLog(`Syncing page 1...`);
+        const firstRes = await apiFetch<{ created: number; updated: number; totalUsers: number; totalPages: number }>('/api/woo/sync?page=1', { method: 'POST' });
 
-      if (totalPages > 1) {
-        for (let p = 2; p <= totalPages; p++) {
-          setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
-          const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
-          totalCreated += res.created;
-          totalUpdated += res.updated;
+        totalCreated += firstRes.created;
+        totalUpdated += firstRes.updated;
+        const totalPages = firstRes.totalPages;
+        const totalUsers = firstRes.totalUsers;
+
+        if (totalPages > 1) {
+          for (let p = 2; p <= totalPages; p++) {
+            setSyncLog(`Syncing batch ${p} of ${totalPages}...`);
+            const res = await apiFetch<{ created: number; updated: number }>('/api/woo/sync?page=' + p, { method: 'POST' });
+            totalCreated += res.created;
+            totalUpdated += res.updated;
+          }
         }
-      }
 
-      setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
+        setSyncLog(`Success! Synced ${totalUsers} users. (New: ${totalCreated}, Updated: ${totalUpdated})`);
 
-      // Update last sync time
-      const now = new Date().toISOString();
-      const newWooSettings = { ...wooSettings, lastSync: now };
-      await apiFetch('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
-      });
-      setWooSettings(newWooSettings);
+        // Update last sync time
+        const now = new Date().toISOString();
+        const newWooSettings = { ...wooSettings, lastSync: now };
+        await apiFetch('/api/settings', {
+          method: 'PUT',
+          body: JSON.stringify({ reminderConfig, emailTemplate, adminWhatsApp, wooSettings: newWooSettings })
+        });
+        setWooSettings(newWooSettings);
       }
 
       loadSubscribers(subPage, searchQuery); // Refresh the table
