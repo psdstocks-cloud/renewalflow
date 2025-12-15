@@ -425,3 +425,59 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
     next(error);
   }
 });
+
+// Get full sync progress endpoint
+artlyRouter.get('/artly/sync-all/progress', authMiddleware, async (req, res, next) => {
+  try {
+    const user = (req as any).user;
+    if (!user || !user.id) {
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    const workspaceUser = await prisma.workspaceUser.findFirst({
+      where: { userId: user.id },
+    });
+
+    if (!workspaceUser) {
+      return res.status(404).json({ message: 'Workspace not found for user' });
+    }
+
+    const workspaceId = workspaceUser.workspaceId;
+    
+    const connection = await prisma.websiteConnection.findFirst({
+      where: { workspaceId },
+      select: { websiteUrl: true, apiKey: true },
+    });
+
+    if (!connection) {
+      return res.status(404).json({ 
+        message: 'No website connection found',
+        status: 'idle'
+      });
+    }
+
+    // Call WordPress plugin progress endpoint
+    const wpUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all/progress`;
+    
+    const response = await fetch(wpUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-artly-secret': connection.apiKey,
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ 
+        message: 'Failed to get progress',
+        status: 'idle'
+      });
+    }
+
+    const progress = await response.json();
+    res.json(progress);
+  } catch (error: any) {
+    console.error('[artly/sync-all/progress] Error:', error);
+    res.json({ status: 'idle' });
+  }
+});

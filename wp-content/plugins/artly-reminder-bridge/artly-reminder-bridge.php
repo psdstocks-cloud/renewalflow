@@ -19,6 +19,7 @@ const ARB_LAST_SYNC_RESULT = '_artly_last_sync_result';
 const ARB_LAST_SYNC_ERROR = '_artly_last_sync_error';
 const ARB_SYNC_PROGRESS_OPTION = '_artly_sync_progress';
 const ARB_SYNC_CANCEL_FLAG = '_artly_sync_cancel';
+const ARB_FULL_SYNC_PROGRESS_OPTION = '_artly_full_sync_progress';
 
 register_activation_hook(__FILE__, 'artly_reminder_bridge_activate');
 function artly_reminder_bridge_activate(): void
@@ -239,6 +240,17 @@ function artly_register_sync_route()
       return !empty($api_key) && $api_key === $stored_secret;
     },
   ));
+
+  // Full sync progress endpoint (v1.2.0) - get live progress updates
+  register_rest_route('artly/v1', '/sync-all/progress', array(
+    'methods' => 'GET',
+    'callback' => 'artly_handle_full_sync_progress_request',
+    'permission_callback' => function() {
+      $api_key = isset($_SERVER['HTTP_X_ARTLY_SECRET']) ? $_SERVER['HTTP_X_ARTLY_SECRET'] : '';
+      $stored_secret = get_option(ARB_ENGINE_SECRET_OPTION);
+      return !empty($api_key) && $api_key === $stored_secret;
+    },
+  ));
 }
 
 function artly_handle_sync_request(WP_REST_Request $request)
@@ -397,6 +409,21 @@ function artly_handle_full_sync_request(WP_REST_Request $request)
     return new WP_Error('unauthorized', 'Invalid API key', array('status' => 401));
   }
 
+  // Initialize full sync progress
+  $start_time = current_time('mysql', true);
+  update_option(ARB_FULL_SYNC_PROGRESS_OPTION, array(
+    'status' => 'running',
+    'current_step' => 'users',
+    'total_steps' => 3,
+    'completed_steps' => 0,
+    'overall_progress' => 0,
+    'start_time' => $start_time,
+    'end_time' => null,
+    'users' => array('status' => 'pending', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => ''),
+    'points' => array('status' => 'pending', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => ''),
+    'charges' => array('status' => 'pending', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => ''),
+  ));
+
   $results = array(
     'users' => null,
     'points' => null,
@@ -406,35 +433,162 @@ function artly_handle_full_sync_request(WP_REST_Request $request)
   // Sync Users
   try {
     artly_reminder_bridge_log('Starting full sync: Users');
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'users';
+    $current_progress['users'] = array('status' => 'running', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => 'Starting users sync...');
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
+    
     $results['users'] = artly_sync_users_from_woo();
+    
+    // Get final progress from individual sync
+    $user_progress = get_option(ARB_SYNC_PROGRESS_OPTION, array());
+    $user_progress_pct = isset($user_progress['total']) && $user_progress['total'] > 0 
+      ? round(($user_progress['processed'] / $user_progress['total']) * 100, 1) 
+      : 100;
+    
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'points';
+    $current_progress['completed_steps'] = 1;
+    $current_progress['overall_progress'] = 33;
+    $current_progress['users'] = array(
+      'status' => 'completed',
+      'progress' => 100,
+      'total' => $user_progress['total'] ?? 0,
+      'processed' => $user_progress['processed'] ?? 0,
+      'message' => $results['users']['message'] ?? 'Users sync completed'
+    );
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
     artly_reminder_bridge_log('Full sync: Users completed');
   } catch (Exception $e) {
     artly_reminder_bridge_log('Full sync: Users error - ' . $e->getMessage());
     $results['users'] = array('success' => false, 'message' => $e->getMessage());
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['users'] = array('status' => 'error', 'message' => $e->getMessage(), 'progress' => 0);
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
   }
 
   // Sync Points
   try {
     artly_reminder_bridge_log('Starting full sync: Points');
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'points';
+    $current_progress['points'] = array('status' => 'running', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => 'Starting points sync...');
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
+    
     $results['points'] = artly_sync_points_balances_from_woo();
+    
+    // Get final progress from individual sync
+    $points_progress = get_option(ARB_SYNC_PROGRESS_OPTION, array());
+    $points_progress_pct = isset($points_progress['total']) && $points_progress['total'] > 0 
+      ? round(($points_progress['processed'] / $points_progress['total']) * 100, 1) 
+      : 100;
+    
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'charges';
+    $current_progress['completed_steps'] = 2;
+    $current_progress['overall_progress'] = 67;
+    $current_progress['points'] = array(
+      'status' => 'completed',
+      'progress' => 100,
+      'total' => $points_progress['total'] ?? 0,
+      'processed' => $points_progress['processed'] ?? 0,
+      'message' => $results['points']['message'] ?? 'Points sync completed'
+    );
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
     artly_reminder_bridge_log('Full sync: Points completed');
   } catch (Exception $e) {
     artly_reminder_bridge_log('Full sync: Points error - ' . $e->getMessage());
     $results['points'] = array('success' => false, 'message' => $e->getMessage());
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['points'] = array('status' => 'error', 'message' => $e->getMessage(), 'progress' => 0);
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
   }
 
   // Sync Charges
   try {
     artly_reminder_bridge_log('Starting full sync: Charges');
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'charges';
+    $current_progress['charges'] = array('status' => 'running', 'progress' => 0, 'total' => 0, 'processed' => 0, 'message' => 'Starting charges sync...');
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
+    
     $results['charges'] = artly_sync_charges_from_woo();
+    
+    // Get final progress from individual sync
+    $charges_progress = get_option(ARB_SYNC_PROGRESS_OPTION, array());
+    $charges_progress_pct = isset($charges_progress['total']) && $charges_progress['total'] > 0 
+      ? round(($charges_progress['processed'] / $charges_progress['total']) * 100, 1) 
+      : 100;
+    
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['current_step'] = 'completed';
+    $current_progress['completed_steps'] = 3;
+    $current_progress['overall_progress'] = 100;
+    $current_progress['charges'] = array(
+      'status' => 'completed',
+      'progress' => 100,
+      'total' => $charges_progress['total'] ?? 0,
+      'processed' => $charges_progress['processed'] ?? 0,
+      'message' => $results['charges']['message'] ?? 'Charges sync completed'
+    );
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
     artly_reminder_bridge_log('Full sync: Charges completed');
   } catch (Exception $e) {
     artly_reminder_bridge_log('Full sync: Charges error - ' . $e->getMessage());
     $results['charges'] = array('success' => false, 'message' => $e->getMessage());
+    $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+    $current_progress['charges'] = array('status' => 'error', 'message' => $e->getMessage(), 'progress' => 0);
+    update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
   }
+
+  // Finalize
+  $current_progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, array());
+  $current_progress['status'] = 'completed';
+  $current_progress['end_time'] = current_time('mysql', true);
+  update_option(ARB_FULL_SYNC_PROGRESS_OPTION, $current_progress);
 
   artly_reminder_bridge_log('Full sync completed');
   return new WP_REST_Response($results, 200);
+}
+
+function artly_handle_full_sync_progress_request(WP_REST_Request $request)
+{
+  $api_key = $request->get_header('x-artly-secret');
+  $stored_secret = get_option(ARB_ENGINE_SECRET_OPTION);
+  
+  if (empty($api_key) || $api_key !== $stored_secret) {
+    return new WP_Error('unauthorized', 'Invalid API key', array('status' => 401));
+  }
+
+  $progress = get_option(ARB_FULL_SYNC_PROGRESS_OPTION, null);
+  
+  if (!$progress) {
+    return new WP_REST_Response(array('status' => 'idle'), 200);
+  }
+
+  // Calculate current step progress from individual sync progress
+  $current_step = $progress['current_step'] ?? 'users';
+  $individual_progress = get_option(ARB_SYNC_PROGRESS_OPTION, array());
+  
+  if ($current_step !== 'completed' && $current_step !== 'users' && $current_step !== 'points' && $current_step !== 'charges') {
+    // Invalid step, return current progress
+    return new WP_REST_Response($progress, 200);
+  }
+
+  if ($current_step !== 'completed' && isset($individual_progress['total']) && $individual_progress['total'] > 0) {
+    $step_progress = round(($individual_progress['processed'] / $individual_progress['total']) * 100, 1);
+    $progress[$current_step]['progress'] = $step_progress;
+    $progress[$current_step]['total'] = $individual_progress['total'];
+    $progress[$current_step]['processed'] = $individual_progress['processed'];
+    $progress[$current_step]['message'] = $individual_progress['message'] ?? '';
+    
+    // Calculate overall progress: completed steps + current step progress
+    $base_progress = ($progress['completed_steps'] / $progress['total_steps']) * 100;
+    $current_step_weight = (1 / $progress['total_steps']) * 100;
+    $progress['overall_progress'] = round($base_progress + (($step_progress / 100) * $current_step_weight), 1);
+  }
+
+  return new WP_REST_Response($progress, 200);
 }
 
 // --- End Custom Sync ---
