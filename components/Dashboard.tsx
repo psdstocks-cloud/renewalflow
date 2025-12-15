@@ -422,7 +422,6 @@ const Dashboard: React.FC = () => {
         // Store interval reference for cleanup
         (window as any).__syncPollInterval = pollInterval;
       } else {
-      } else {
         // Fallback to old WooCommerce API sync (if no plugin connection)
         setSyncLog('No plugin connection found. Using WooCommerce API sync...');
         
