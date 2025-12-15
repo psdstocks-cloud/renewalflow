@@ -359,8 +359,8 @@ artlyRouter.post('/artly/sync/charges', artlyAuth, async (req, res, next) => {
   }
 });
 
-// Helper to run sync steps sequentially in background
-async function runSequentialSync(connection: { websiteUrl: string; apiKey: string }) {
+// Helper to run sync steps in parallel for faster execution (Plan 1: Quick Wins)
+async function runParallelSync(connection: { websiteUrl: string; apiKey: string }) {
   const steps = ['users', 'points', 'charges'];
   const baseUrl = `${connection.websiteUrl.replace(/\/$/, '')}/wp-json/artly/v1/sync-all`;
   const headers = {
@@ -369,11 +369,12 @@ async function runSequentialSync(connection: { websiteUrl: string; apiKey: strin
     'User-Agent': 'RenewalFlow-Backend/1.0',
   };
 
-  console.log('[runSequentialSync] Starting background sequential sync...');
+  console.log('[runParallelSync] Starting background parallel sync...');
 
-  for (const step of steps) {
+  // Run all steps in parallel for maximum speed
+  const syncPromises = steps.map(async (step) => {
     try {
-      console.log(`[runSequentialSync] Triggering step: ${step}`);
+      console.log(`[runParallelSync] Triggering step: ${step}`);
       const stepUrl = `${baseUrl}?step=${step}`;
 
       const response = await fetch(stepUrl, {
@@ -384,19 +385,24 @@ async function runSequentialSync(connection: { websiteUrl: string; apiKey: strin
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
-        console.error(`[runSequentialSync] Step ${step} failed: ${response.status} ${errorText}`);
-        // We continue to next step? Or stop? 
-        // If users fail, points might fail too. But let's try to continue to be resilient? 
-        // Actually, usually better to stop if a dependency fails. But here they are somewhat independent.
-        // Let's continue but log error. The WP side also records the error in the option.
+        console.error(`[runParallelSync] Step ${step} failed: ${response.status} ${errorText}`);
+        return { step, success: false, error: errorText };
       } else {
-        console.log(`[runSequentialSync] Step ${step} completed successfully`);
+        console.log(`[runParallelSync] Step ${step} completed successfully`);
+        return { step, success: true };
       }
     } catch (error: any) {
-      console.error(`[runSequentialSync] Error executing step ${step}:`, error);
+      console.error(`[runParallelSync] Error executing step ${step}:`, error);
+      return { step, success: false, error: error.message };
     }
-  }
-  console.log('[runSequentialSync] All steps finished.');
+  });
+
+  // Wait for all steps to complete
+  const results = await Promise.all(syncPromises);
+  const successful = results.filter(r => r.success).length;
+  console.log(`[runParallelSync] All steps finished. ${successful}/${steps.length} successful.`);
+  
+  return results;
 }
 
 // Full sync endpoint - Triggers background sequential sync
@@ -460,8 +466,8 @@ artlyRouter.post('/artly/sync-all', authMiddleware, async (req, res, next) => {
       });
     }
 
-    // 2. Start Background Orchestration (Fire and Forget)
-    runSequentialSync(connection).catch(err => {
+    // 2. Start Background Orchestration (Fire and Forget) - Parallel execution for speed
+    runParallelSync(connection).catch(err => {
       console.error('[artly/sync-all] Background sync error:', err);
     });
 
