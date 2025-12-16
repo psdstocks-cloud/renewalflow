@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { cronAuthMiddleware } from '../middleware/auth';
+import { cronAuthMiddleware, hybridAuthMiddleware } from '../middleware/auth';
 import { syncAllWooCustomers } from '../services/wooService';
 import { computeReminderTasks, sendReminderBatch } from '../services/reminderService';
 
 export const cronRouter = Router();
 
-cronRouter.post('/api/cron/daily', cronAuthMiddleware, async (_req, res, next) => {
+cronRouter.post('/api/cron/daily', hybridAuthMiddleware, async (_req, res, next) => {
   try {
     const date = new Date();
 
