@@ -82,10 +82,10 @@ app.use((req, res, next) => {
 
 // Register routes - artlyRouter should be early to avoid conflicts
 app.use(healthRouter);
+app.use('/api/webhooks', webhookRouter); // Defined early to avoid auth middleware from other routers
 app.use(artlyRouter); // Move artlyRouter earlier to ensure it's checked first
 app.use(workspaceRouter);
 app.use(websiteConnectionRouter);
-app.use('/api/webhooks', webhookRouter);
 app.use(subscriberRouter);
 app.use(settingsRouter);
 app.use(reminderRouter);

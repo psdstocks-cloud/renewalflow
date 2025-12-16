@@ -401,13 +401,13 @@ const Dashboard: React.FC = () => {
             }
           } catch (err: any) {
             console.error('Progress poll error:', err);
-            
+
             // Handle 502 errors gracefully - don't stop polling immediately
             if (err.message?.includes('502') || err.message?.includes('failed to fetch')) {
               // Continue polling but log the error
               console.warn('Progress endpoint temporarily unavailable, retrying...');
               pollCount++;
-              
+
               // Only stop after multiple consecutive failures
               if (pollCount >= maxPolls) {
                 setSyncLog('Sync progress unavailable. The sync may still be running in the background. Check WordPress admin for details.');
@@ -417,7 +417,7 @@ const Dashboard: React.FC = () => {
               }
               return;
             }
-            
+
             // For other errors, continue polling
             pollCount++;
             if (pollCount >= maxPolls) {
@@ -662,30 +662,9 @@ const Dashboard: React.FC = () => {
         )
         }
 
-        {
-          activeTab === 'integrations' && (
-            <IntegrationsView
-              wooSettings={wooSettings}
-              setWooSettings={setWooSettings}
-              connections={connections}
-              onCreateConnection={handleCreateConnection}
-              onDeleteConnection={handleDeleteConnection}
-              onRegenerateKey={() => { }}
-              onSave={handleSaveSettings}
-              isSaving={isSaving}
-              onSyncWoo={handleSyncWoo}
-              syncProgress={syncProgress}
-              isSyncingWoo={isSyncingWoo}
-              onBackfillWoo={handleBackfillWoo}
-              isBackfillingWoo={isBackfillingWoo}
-              backfillProgress={backfillProgress}
-              syncLog={syncLog}
-              onSyncRecent={handleSyncRecent}
-              isSyncingRecent={isSyncingRecent}
-            />
-          )
-        }
 
+
+// ... (imports remain)
         {
           activeTab === 'revenue' && (
             <RevenueView />
@@ -701,8 +680,20 @@ const Dashboard: React.FC = () => {
               setEmailTemplate={setEmailTemplate}
               adminWhatsApp={adminWhatsApp}
               setAdminWhatsApp={setAdminWhatsApp}
+              wooSettings={wooSettings}
+              setWooSettings={setWooSettings}
               onSave={handleSaveSettings}
               isSaving={isSaving}
+              // Pass connection props
+              connections={connections}
+              onCreateConnection={handleCreateConnection}
+              onDeleteConnection={handleDeleteConnection}
+              onRegenerateKey={(id) => {
+                // Regenerate key logic not implemented in Dashboard yet, but passed as prop.
+                // We can either implement it or just alert.
+                // The view expects it.
+                alert('Regenerate key logic placeholder');
+              }}
             />
           )
         }

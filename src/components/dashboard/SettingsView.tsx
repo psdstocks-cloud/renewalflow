@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ReminderConfig, EmailTemplateConfig, AdminWhatsAppConfig, WooSettings } from '@/src/types';
+import { ReminderConfig, EmailTemplateConfig, AdminWhatsAppConfig, WooSettings, WebsiteConnection } from '@/src/types';
 import { SettingsLayout, SettingsTab } from '@/src/components/settings/SettingsLayout';
 
 // Sub-tabs
@@ -17,9 +17,14 @@ interface SettingsViewProps {
     adminWhatsApp: AdminWhatsAppConfig;
     setAdminWhatsApp: (c: AdminWhatsAppConfig) => void;
     wooSettings?: WooSettings;
-    setWooSettings?: (c: WooSettings) => void; // Optional for backward compatibility if not passed yet
+    setWooSettings?: (c: WooSettings) => void;
     onSave: () => void;
     isSaving: boolean;
+    // New Connection Props
+    connections: WebsiteConnection[];
+    onCreateConnection: (url: string) => void;
+    onDeleteConnection: (id: string) => void;
+    onRegenerateKey: (id: string) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -32,7 +37,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     wooSettings = { url: '', consumerKey: '', consumerSecret: '', pointsPerCurrency: 1 },
     setWooSettings = () => { },
     onSave,
-    isSaving
+    isSaving,
+    connections, onCreateConnection, onDeleteConnection, onRegenerateKey
 }) => {
 
     // Internal tab state for the settings view
@@ -67,6 +73,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     setAdminWhatsApp={setAdminWhatsApp}
                     wooSettings={wooSettings}
                     setWooSettings={setWooSettings}
+                    connections={connections}
+                    onCreateConnection={onCreateConnection}
+                    onDeleteConnection={onDeleteConnection}
+                    onRegenerateKey={onRegenerateKey}
                 />
             )}
         </SettingsLayout>
