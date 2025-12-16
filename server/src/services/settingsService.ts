@@ -23,6 +23,18 @@ const whatsappSchema = z.object({
   phoneNumber: z.string()
 });
 
+const syncStatusSchema = z.object({
+  state: z.enum(['idle', 'syncing', 'completed', 'error']),
+  message: z.string(),
+  progress: z.number(),
+  details: z.object({
+    current: z.number(),
+    total: z.number(),
+    stage: z.string()
+  }).optional(),
+  lastUpdated: z.string()
+});
+
 const wooSchema = z.object({
   url: z.string().transform(val => {
     if (!val) return '';
@@ -35,7 +47,8 @@ const wooSchema = z.object({
   consumerKey: z.string(),
   consumerSecret: z.string(),
   pointsPerCurrency: z.number().positive(),
-  lastSync: z.string().optional()
+  lastSync: z.string().optional(),
+  syncStatus: syncStatusSchema.optional()
 });
 
 // Get default workspace ID (for now, use the first workspace)
@@ -189,12 +202,30 @@ export async function updateWooSyncTimestamp(dateIsoString: string, workspaceId?
 
   // We write directly to DB to avoid triggering the encryption logic in updateSettings
   // because currentSettings are already encrypted in the DB.
+  // ... (existing updateWooSyncTimestamp)
   await prisma.appSettings.update({
     where: { workspaceId_key: { workspaceId: wsId, key: WOO_KEY } },
     data: {
       value: {
         ...currentSettings,
         lastSync: dateIsoString
+      } as any
+    }
+  });
+}
+
+export async function updateWooSyncStatus(status: import('../types/index').WooSyncStatus, workspaceId?: string) {
+  const wsId = workspaceId || await getDefaultWorkspaceId();
+  const currentSettings = await getSetting<WooSettings>(WOO_KEY, wsId);
+
+  if (!currentSettings) return;
+
+  await prisma.appSettings.update({
+    where: { workspaceId_key: { workspaceId: wsId, key: WOO_KEY } },
+    data: {
+      value: {
+        ...currentSettings,
+        syncStatus: status
       } as any
     }
   });

@@ -34,11 +34,25 @@ export interface AdminWhatsAppConfig {
   phoneNumber: string;
 }
 
+export interface WooSyncStatus {
+  state: 'idle' | 'syncing' | 'completed' | 'error';
+  message: string;
+  progress: number; // 0-100
+  details?: {
+    current: number;
+    total: number;
+    stage: string;
+  };
+  lastUpdated: string;
+}
+
 export interface WooSettings {
   url: string;
   consumerKey: string;
   consumerSecret: string;
   pointsPerCurrency: number;
+  lastSync?: string; // ISO date
+  syncStatus?: WooSyncStatus;
 }
 
 export interface AppSettings {

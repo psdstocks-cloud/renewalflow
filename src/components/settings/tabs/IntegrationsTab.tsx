@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Card } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
-import { AdminWhatsAppConfig, WooSettings, WebsiteConnection } from '@/src/types';
+import { AdminWhatsAppConfig, WooSettings, WebsiteConnection, WooSyncStatus } from '@/src/types';
 import { apiFetch } from '@/src/services/apiClient';
 
 interface IntegrationsTabProps {
@@ -22,11 +22,42 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
     connections, onCreateConnection, onDeleteConnection, onRegenerateKey
 }) => {
     const [isSyncing, setIsSyncing] = useState(false);
+    const [syncStatus, setSyncStatus] = useState<WooSyncStatus | null>(null);
     const [copySuccess, setCopySuccess] = useState('');
 
     // Connections UI State
     const [newUrl, setNewUrl] = useState('');
     const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+    // Initial Poll on Mount
+    React.useEffect(() => {
+        pollSyncStatus();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const pollSyncStatus = async () => {
+        try {
+            const status = await apiFetch<WooSyncStatus>('/api/woo/status');
+            setSyncStatus(status);
+
+            if (status.state === 'syncing') {
+                setIsSyncing(true);
+                // Keep polling
+                setTimeout(pollSyncStatus, 2000);
+            } else if (status.state === 'completed' || status.state === 'error') {
+                setIsSyncing(false);
+                // Refresh settings to get latest timestamps if completed
+                if (status.state === 'completed') {
+                    // Ideally trigger a refresh up the chain, but for now just stop polling
+                }
+            } else {
+                setIsSyncing(false);
+            }
+        } catch (err) {
+            console.error('Poll failed', err);
+            setIsSyncing(false);
+        }
+    };
 
     const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text);
@@ -46,13 +77,21 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
 
     const handleForceSync = async () => {
         setIsSyncing(true);
+        setSyncStatus({
+            state: 'syncing',
+            message: 'Initiating sync...',
+            progress: 0,
+            lastUpdated: new Date().toISOString()
+        });
+
         try {
-            await apiFetch('/api/cron/daily', { method: 'POST' });
-            alert('Sync started successfully!');
+            // Trigger Background Sync
+            await apiFetch('/api/woo/sync?background=true', { method: 'POST' });
+            // Start polling
+            setTimeout(pollSyncStatus, 1000);
         } catch (error) {
-            alert('Sync failed check console.');
+            alert('Sync trigger failed. Check console.');
             console.error(error);
-        } finally {
             setIsSyncing(false);
         }
     };
@@ -133,6 +172,34 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
                         </div>
                     </div>
 
+                    {/* Pending / Active Sync Status */}
+                    {syncStatus && syncStatus.state === 'syncing' && (
+                        <div className="mb-4 p-3 bg-violet-500/10 rounded-lg border border-violet-500/20">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-xs font-medium text-violet-300">Syncing...</span>
+                                <span className="text-xs text-violet-300">{syncStatus.progress}%</span>
+                            </div>
+                            <div className="w-full bg-zinc-800 rounded-full h-1.5 mb-2 overflow-hidden">
+                                <div
+                                    className="bg-violet-500 h-1.5 rounded-full transition-all duration-300"
+                                    style={{ width: `${syncStatus.progress}%` }}
+                                ></div>
+                            </div>
+                            <p className="text-[10px] text-zinc-400">{syncStatus.message}</p>
+                        </div>
+                    )}
+
+                    {/* Last Status Message (if completed/error recently) */}
+                    {syncStatus && syncStatus.state !== 'syncing' && syncStatus.state !== 'idle' && (
+                        <div className={`mb-4 p-2 rounded-lg border text-xs ${syncStatus.state === 'completed'
+                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                            : 'bg-red-500/10 border-red-500/20 text-red-400'
+                            }`}>
+                            <i className={`fas ${syncStatus.state === 'completed' ? 'fa-check-circle' : 'fa-exclamation-circle'} mr-2`}></i>
+                            {syncStatus.message}
+                        </div>
+                    )}
+
                     <div className="flex gap-3">
                         <Button variant="outline" className="flex-1">Test Connection</Button>
                         <Button
@@ -140,7 +207,7 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
                             onClick={handleForceSync}
                             disabled={isSyncing}
                         >
-                            {isSyncing ? <i className="fas fa-spinner fa-spin" /> : 'Force Sync'}
+                            {isSyncing ? <><i className="fas fa-spinner fa-spin mr-2" /> Syncing</> : 'Force Sync'}
                         </Button>
                     </div>
                 </Card>

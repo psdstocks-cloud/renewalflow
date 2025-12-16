@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { getUnmaskedSettings, updateWooSyncTimestamp } from './settingsService';
+import { getUnmaskedSettings, updateWooSyncTimestamp, updateWooSyncStatus } from './settingsService';
 import { addDays } from 'date-fns';
 
 interface CustomSyncUser {
@@ -165,42 +165,92 @@ export async function processUserHistory(subscriberId: string, email: string, ws
 }
 
 export async function syncAllWooCustomers(workspaceId?: string) {
-  // Capture time BEFORE we start syncing to ensure we don't miss events happening during the sync
-  const syncStartTime = new Date().toISOString();
+  const wsId = workspaceId || (await prisma.workspace.findFirst())?.id;
+  if (!wsId) return { created: 0, updated: 0, totalOrdersProcessed: 0 };
 
-  let page = 1;
-  let totalCreated = 0;
-  let totalUpdated = 0;
-  let totalProcessed = 0;
+  // 1. Set Status to Syncing
+  await updateWooSyncStatus({
+    state: 'syncing',
+    message: 'Starting sync process...',
+    progress: 0,
+    lastUpdated: new Date().toISOString(),
+    details: { current: 0, total: 0, stage: 'initializing' }
+  }, wsId);
 
-  console.log(`[Sync] Starting batch sync...`);
+  try {
+    const syncStartTime = new Date().toISOString();
+    let page = 1;
+    let totalCreated = 0;
+    let totalUpdated = 0;
+    let totalProcessed = 0;
+    let totalPages = 1; // Unknown initially
 
-  while (true) {
-    // This function already reads 'lastSync' from settings to decide what to fetch
-    const res = await syncWooCustomersPage(page, workspaceId);
+    console.log(`[Sync] Starting batch sync...`);
 
-    totalCreated += res.created;
-    totalUpdated += res.updated;
-    totalProcessed += 50;
+    while (true) {
+      // Fetch Page
+      const res = await syncWooCustomersPage(page, wsId);
 
-    if (page >= res.totalPages || res.totalPages === 0) {
-      break;
+      totalCreated += res.created;
+      totalUpdated += res.updated;
+      totalProcessed += 50; // Approximated
+      totalPages = res.totalPages; // Update total pages estimate
+
+      // Update Progress (Every page)
+      const percent = Math.min(95, Math.ceil((page / (totalPages || 1)) * 100));
+
+      await updateWooSyncStatus({
+        state: 'syncing',
+        message: `Syncing page ${page}/${totalPages}...`,
+        progress: percent,
+        lastUpdated: new Date().toISOString(),
+        details: {
+          current: page,
+          total: totalPages,
+          stage: 'fetching_customers'
+        }
+      }, wsId);
+
+      if (page >= res.totalPages || res.totalPages === 0) {
+        break;
+      }
+      page++;
+      await new Promise(r => setTimeout(r, 500));
     }
-    page++;
-    await new Promise(r => setTimeout(r, 500));
-  }
 
-  // 3. Save the timestamp so the next run only fetches NEW data
-  // We save if we did anything OR if it was the first page (meaning we successfully checked)
-  // Actually, even if 0 results, we should update timestamp so next time we check from NOW.
-  // But user logic says: "if (totalCreated > 0 || totalUpdated > 0 || page === 1)"
-  // I will follow user logic.
-  if (totalCreated > 0 || totalUpdated > 0 || page >= 1) {
-    await updateWooSyncTimestamp(syncStartTime, workspaceId);
-    console.log(`[Sync] Timestamp updated to ${syncStartTime}`);
-  }
+    // 3. Save Timestamp
+    if (totalCreated > 0 || totalUpdated > 0 || page >= 1) {
+      await updateWooSyncTimestamp(syncStartTime, wsId);
+    }
 
-  return { created: totalCreated, updated: totalUpdated, totalOrdersProcessed: totalProcessed };
+    // 4. Set Status to Completed
+    await updateWooSyncStatus({
+      state: 'completed',
+      message: `Sync complete. Processed ${totalCreated + totalUpdated} changes.`,
+      progress: 100,
+      lastUpdated: new Date().toISOString(),
+      details: {
+        current: totalPages,
+        total: totalPages,
+        stage: 'finished'
+      }
+    }, wsId);
+
+    return { created: totalCreated, updated: totalUpdated, totalOrdersProcessed: totalProcessed };
+
+  } catch (error: any) {
+    console.error('[Sync] Error:', error);
+
+    // Set Status to Error
+    await updateWooSyncStatus({
+      state: 'error',
+      message: `Sync failed: ${error.message}`,
+      progress: 0,
+      lastUpdated: new Date().toISOString()
+    }, wsId);
+
+    throw error;
+  }
 }
 
 export interface PointLogEntry {

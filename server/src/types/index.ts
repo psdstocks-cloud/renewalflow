@@ -26,12 +26,25 @@ export interface WhatsAppConfig {
   phoneNumber: string;
 }
 
+export interface WooSyncStatus {
+  state: 'idle' | 'syncing' | 'completed' | 'error';
+  message: string;
+  progress: number; // 0-100
+  details?: {
+    current: number;
+    total: number;
+    stage: string;
+  };
+  lastUpdated: string;
+}
+
 export interface WooSettings {
   url: string;
   consumerKey: string;
   consumerSecret: string;
   pointsPerCurrency: number;
   lastSync?: string;
+  syncStatus?: WooSyncStatus;
 }
 
 export interface SettingsResponse {
