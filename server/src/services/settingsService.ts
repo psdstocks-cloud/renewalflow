@@ -180,3 +180,22 @@ export async function getUnmaskedSettings(workspaceId?: string): Promise<Setting
     wooSettings: processedWooSettings ? wooSchema.parse(processedWooSettings) : null
   };
 }
+
+export async function updateWooSyncTimestamp(dateIsoString: string, workspaceId?: string) {
+  const wsId = workspaceId || await getDefaultWorkspaceId();
+  const currentSettings = await getSetting<WooSettings>(WOO_KEY, wsId);
+
+  if (!currentSettings) return;
+
+  // We write directly to DB to avoid triggering the encryption logic in updateSettings
+  // because currentSettings are already encrypted in the DB.
+  await prisma.appSettings.update({
+    where: { workspaceId_key: { workspaceId: wsId, key: WOO_KEY } },
+    data: {
+      value: {
+        ...currentSettings,
+        lastSync: dateIsoString
+      } as any
+    }
+  });
+}

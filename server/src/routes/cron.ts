@@ -8,16 +8,24 @@ export const cronRouter = Router();
 cronRouter.post('/api/cron/daily', cronAuthMiddleware, async (_req, res, next) => {
   try {
     const date = new Date();
-    let wooResult = null;
-    try {
-      wooResult = await syncAllWooCustomers();
-    } catch (error) {
-      console.warn('Woo sync failed during cron', error);
-    }
+
+    // 1. Run the Sync (Now efficient due to Phase 1)
+    console.log('Running Hourly Sync...');
+    const wooResult = await syncAllWooCustomers();
+
+    // 2. Compute Reminders (This is fast, so safe to run hourly)
     const tasks = await computeReminderTasks(date);
     const reminderSummary = await sendReminderBatch(tasks);
-    res.json({ date: date.toISOString().slice(0, 10), wooSync: wooResult, reminders: reminderSummary });
+
+    res.json({
+      success: true,
+      timestamp: date.toISOString(),
+      wooSync: wooResult,
+      reminders: reminderSummary
+    });
   } catch (error) {
-    next(error);
+    console.error('Cron Job Failed:', error);
+    // Return 500 so your Cron provider knows it failed and can retry/alert you
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });

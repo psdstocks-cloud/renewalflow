@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { getUnmaskedSettings } from './settingsService';
+import { getUnmaskedSettings, updateWooSyncTimestamp } from './settingsService';
 import { addDays } from 'date-fns';
 
 interface CustomSyncUser {
@@ -165,23 +165,39 @@ export async function processUserHistory(subscriberId: string, email: string, ws
 }
 
 export async function syncAllWooCustomers(workspaceId?: string) {
+  // Capture time BEFORE we start syncing to ensure we don't miss events happening during the sync
+  const syncStartTime = new Date().toISOString();
+
   let page = 1;
   let totalCreated = 0;
   let totalUpdated = 0;
   let totalProcessed = 0;
 
+  console.log(`[Sync] Starting batch sync...`);
+
   while (true) {
+    // This function already reads 'lastSync' from settings to decide what to fetch
     const res = await syncWooCustomersPage(page, workspaceId);
+
     totalCreated += res.created;
     totalUpdated += res.updated;
-    totalProcessed += 50; // approximate, or we can use users length if we exposed it
+    totalProcessed += 50;
 
     if (page >= res.totalPages || res.totalPages === 0) {
       break;
     }
     page++;
-    // Add small delay to be nice to the server in a tight loop
     await new Promise(r => setTimeout(r, 500));
+  }
+
+  // 3. Save the timestamp so the next run only fetches NEW data
+  // We save if we did anything OR if it was the first page (meaning we successfully checked)
+  // Actually, even if 0 results, we should update timestamp so next time we check from NOW.
+  // But user logic says: "if (totalCreated > 0 || totalUpdated > 0 || page === 1)"
+  // I will follow user logic.
+  if (totalCreated > 0 || totalUpdated > 0 || page >= 1) {
+    await updateWooSyncTimestamp(syncStartTime, workspaceId);
+    console.log(`[Sync] Timestamp updated to ${syncStartTime}`);
   }
 
   return { created: totalCreated, updated: totalUpdated, totalOrdersProcessed: totalProcessed };

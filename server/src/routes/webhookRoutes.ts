@@ -68,4 +68,60 @@ router.post('/woo/points', async (req, res) => {
     }
 });
 
+// Schema for WooCommerce Order Webhook
+const orderSchema = z.object({
+    id: z.number(),
+    status: z.string(),
+    billing: z.object({
+        email: z.string().email(),
+        first_name: z.string(),
+        phone: z.string().optional()
+    }),
+    date_created: z.string(),
+    total: z.string(),
+    currency: z.string().default('USD')
+});
+
+router.post('/woo/orders', async (req, res) => {
+    try {
+        console.log(`[Webhook] Received Order #${req.body.id}`);
+
+        // 1. Basic Validation (Loose, because Woo payloads vary)
+        const body = req.body;
+        if (!body.billing?.email) {
+            return res.status(200).send('Ignored: No email');
+        }
+
+        const email = body.billing.email;
+        const date = new Date(body.date_created || new Date());
+
+        // 2. Find or Create Subscriber immediately
+        // We use "upsert" logic here effectively
+        const subscriber = await prisma.subscriber.findUnique({ where: { email } });
+
+        if (subscriber) {
+            // Just update the last purchase date
+            await prisma.subscriber.update({
+                where: { id: subscriber.id },
+                data: { lastPurchaseDate: date }
+            });
+            console.log(`[Webhook] Updated existing subscriber ${email}`);
+        } else {
+            // If it's a new user, we might want to trigger a full sync for just them
+            // OR create a basic record. 
+            // Recommendation: Trigger the "Pull" for this specific user.
+            // For now, let's log it.
+            console.log(`[Webhook] New customer ${email} detected. Waiting for hourly sync to fully onboard.`);
+        }
+
+        // 3. (Optional) Create Revenue Transaction immediately
+        // You can call createRevenueTransaction() here if you want instant revenue stats.
+
+        res.status(200).send('Webhook Received');
+    } catch (err) {
+        console.error('[Webhook] Order Error:', err);
+        res.status(400).send('Error');
+    }
+});
+
 export default router;
