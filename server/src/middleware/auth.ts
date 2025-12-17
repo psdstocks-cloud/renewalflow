@@ -63,7 +63,16 @@ export async function hybridAuthMiddleware(req: Request, res: Response, next: Ne
   // 1. Try Cron/Admin Auth
   const cronKey = req.header('x-cron-key') ?? req.header('x-admin-api-key');
   const expected = env.CRON_API_KEY ?? env.ADMIN_API_KEY;
+
+  // DEBUG: Log what we're comparing
+  console.log('[hybridAuth] Checking cron auth:', {
+    receivedKey: cronKey ? `${cronKey.substring(0, 20)}...` : 'NONE',
+    expectedKey: expected ? `${expected.substring(0, 20)}...` : 'NOT_SET',
+    match: cronKey === expected
+  });
+
   if (cronKey && cronKey === expected) {
+    console.log('[hybridAuth] ✅ Cron key matched!');
     return next();
   }
 
