@@ -9,7 +9,7 @@ smtpRouter.use(authMiddleware);
 
 /**
  * GET /api/smtp/status
- * Check if SMTP is configured and verify connection
+ * Check if SMTP is configured and verify connection (with timeout)
  */
 smtpRouter.get('/api/smtp/status', async (_req: Request, res: Response) => {
     try {
@@ -31,9 +31,27 @@ smtpRouter.get('/api/smtp/status', async (_req: Request, res: Response) => {
             });
         }
 
-        // Try to verify connection
+        // Try to verify connection with a timeout
+        const timeoutMs = 10000; // 10 second timeout
+
+        const verifyWithTimeout = () => new Promise<boolean>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error('Connection timeout after 10 seconds'));
+            }, timeoutMs);
+
+            transporter.verify()
+                .then(() => {
+                    clearTimeout(timer);
+                    resolve(true);
+                })
+                .catch((err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                });
+        });
+
         try {
-            await transporter.verify();
+            await verifyWithTimeout();
             return res.json({
                 configured: true,
                 connected: true,
