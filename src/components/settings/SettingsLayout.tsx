@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLanguage } from '@/src/context/LanguageContext';
 
-export type SettingsTab = 'profile' | 'workspace' | 'automation' | 'integrations';
+export type SettingsTab = 'profile' | 'workspace' | 'automation' | 'notifications' | 'integrations';
 
 interface SettingsLayoutProps {
     children: React.ReactNode;
@@ -16,6 +16,7 @@ export const SettingsLayout: React.FC<SettingsLayoutProps> = ({ children, active
         { id: 'profile', label: lang === 'en' ? 'Profile' : 'الملف الشخصي', icon: 'fa-user-circle' },
         { id: 'workspace', label: lang === 'en' ? 'Workspace' : 'مساحة العمل', icon: 'fa-building' },
         { id: 'automation', label: lang === 'en' ? 'Automation' : 'الآتمتة والذكاء', icon: 'fa-robot' },
+        { id: 'notifications', label: lang === 'en' ? 'Notifications' : 'الإشعارات', icon: 'fa-bell' },
         { id: 'integrations', label: lang === 'en' ? 'Integrations' : 'الربط والتكامل', icon: 'fa-plug' },
     ];
 

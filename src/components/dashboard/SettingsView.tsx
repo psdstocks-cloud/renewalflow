@@ -6,6 +6,7 @@ import { SettingsLayout, SettingsTab } from '@/src/components/settings/SettingsL
 import { ProfileTab } from '../settings/tabs/ProfileTab';
 import { WorkspaceTab } from '../settings/tabs/WorkspaceTab';
 import { AutomationTab } from '../settings/tabs/AutomationTab';
+import { NotificationsTab } from '../settings/tabs/NotificationsTab';
 import { IntegrationsTab } from '../settings/tabs/IntegrationsTab';
 import { Button } from '@/src/components/ui/Button';
 
@@ -66,6 +67,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     setEmailTemplate={setEmailTemplate}
                 />
             )}
+
+            {activeTab === 'notifications' && <NotificationsTab />}
 
             {activeTab === 'integrations' && (
                 <IntegrationsTab

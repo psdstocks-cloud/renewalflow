@@ -26,14 +26,21 @@ export async function computeReminderTasks(referenceDate = new Date()): Promise<
     const lastNotified = subscriber.lastNotifiedAt;
     const alreadyNotifiedToday = lastNotified && !isAfter(referenceDate, lastNotified);
 
-    if (!alreadyNotifiedToday && daysUntilExpiry === reminderConfig.firstReminderDays) {
-      tasks.push(buildTask(subscriber, 'FIRST_REMINDER', daysUntilExpiry, 'First reminder based on settings'));
-    }
-    if (!alreadyNotifiedToday && daysUntilExpiry === reminderConfig.finalReminderDays) {
-      tasks.push(buildTask(subscriber, 'FINAL_REMINDER', daysUntilExpiry, 'Final reminder before expiry'));
-    }
-    if (daysUntilExpiry < 0 && subscriber.status === 'ACTIVE') {
+    // Show EXPIRED: Already expired (negative days)
+    if (daysUntilExpiry < 0) {
       tasks.push(buildTask(subscriber, 'EXPIRED', daysUntilExpiry, 'Subscription already expired'));
+      continue; // Skip other checks for expired
+    }
+
+    // Show FINAL_REMINDER: Within final reminder threshold (e.g., 1 day or less)
+    if (!alreadyNotifiedToday && daysUntilExpiry <= reminderConfig.finalReminderDays) {
+      tasks.push(buildTask(subscriber, 'FINAL_REMINDER', daysUntilExpiry, 'Urgent: expiring very soon'));
+      continue; // Skip first reminder if already in final window
+    }
+
+    // Show FIRST_REMINDER: Within first reminder threshold (e.g., 3 days or less)
+    if (!alreadyNotifiedToday && daysUntilExpiry <= reminderConfig.firstReminderDays) {
+      tasks.push(buildTask(subscriber, 'FIRST_REMINDER', daysUntilExpiry, 'Approaching expiration'));
     }
   }
 
