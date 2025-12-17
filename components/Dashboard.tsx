@@ -51,7 +51,11 @@ const Dashboard: React.FC = () => {
   // Update URL when tab changes
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
-    setSearchParams({ tab });
+    // Use function form to properly update search params
+    setSearchParams(prev => {
+      prev.set('tab', tab);
+      return prev;
+    });
   };
 
   // Data State
