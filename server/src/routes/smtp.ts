@@ -89,7 +89,7 @@ smtpRouter.get('/api/smtp/status', async (_req: Request, res: Response) => {
 
 /**
  * POST /api/smtp/test
- * Send a test email to verify SMTP works
+ * Send a test email to verify SMTP works (with timeout)
  */
 smtpRouter.post('/api/smtp/test', async (req: Request, res: Response) => {
     try {
@@ -103,33 +103,49 @@ smtpRouter.post('/api/smtp/test', async (req: Request, res: Response) => {
             });
         }
 
-        // Send test email
-        await transporter.sendMail({
-            from: defaultFrom,
-            to: testEmail,
-            subject: '✅ RenewalFlow Test Email - SMTP Working!',
-            html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-          <div style="background: linear-gradient(135deg, #8B5CF6 0%, #06B6D4 100%); padding: 24px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">🎉 SMTP Connection Successful!</h1>
-          </div>
-          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-            This is a test email from <strong>RenewalFlow</strong>. If you're reading this, your SMTP configuration is working correctly!
-          </p>
-          <div style="background: #F3F4F6; padding: 16px; border-radius: 8px; margin: 24px 0;">
-            <p style="color: #6B7280; font-size: 14px; margin: 0;">
-              <strong>SMTP Host:</strong> ${env.SMTP_HOST}<br/>
-              <strong>Sent At:</strong> ${new Date().toISOString()}<br/>
-              <strong>From:</strong> ${env.SMTP_FROM_EMAIL}
+        // Wrap sendMail with a timeout
+        const sendWithTimeout = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error('Email sending timeout after 20 seconds. Check SMTP credentials and try port 465.'));
+            }, 20000);
+
+            transporter.sendMail({
+                from: defaultFrom,
+                to: testEmail,
+                subject: '✅ RenewalFlow Test Email - SMTP Working!',
+                html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+            <div style="background: linear-gradient(135deg, #8B5CF6 0%, #06B6D4 100%); padding: 24px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">🎉 SMTP Connection Successful!</h1>
+            </div>
+            <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+              This is a test email from <strong>RenewalFlow</strong>. If you're reading this, your SMTP configuration is working correctly!
+            </p>
+            <div style="background: #F3F4F6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+              <p style="color: #6B7280; font-size: 14px; margin: 0;">
+                <strong>SMTP Host:</strong> ${env.SMTP_HOST}<br/>
+                <strong>Sent At:</strong> ${new Date().toISOString()}<br/>
+                <strong>From:</strong> ${env.SMTP_FROM_EMAIL}
+              </p>
+            </div>
+            <p style="color: #9CA3AF; font-size: 12px; text-align: center; margin-top: 32px;">
+              RenewalFlow - Subscription Renewal Reminders
             </p>
           </div>
-          <p style="color: #9CA3AF; font-size: 12px; text-align: center; margin-top: 32px;">
-            RenewalFlow - Subscription Renewal Reminders
-          </p>
-        </div>
-      `,
-            text: `RenewalFlow Test Email - SMTP Working!\n\nThis is a test email from RenewalFlow. Your SMTP configuration is working correctly!\n\nSMTP Host: ${env.SMTP_HOST}\nSent At: ${new Date().toISOString()}`
+        `,
+                text: `RenewalFlow Test Email - SMTP Working!\n\nThis is a test email from RenewalFlow. Your SMTP configuration is working correctly!\n\nSMTP Host: ${env.SMTP_HOST}\nSent At: ${new Date().toISOString()}`
+            })
+                .then((result) => {
+                    clearTimeout(timer);
+                    resolve(result);
+                })
+                .catch((err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                });
         });
+
+        await sendWithTimeout;
 
         res.json({
             success: true,
