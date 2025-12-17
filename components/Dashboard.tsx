@@ -16,6 +16,7 @@ import { IntegrationsView } from '@/src/components/dashboard/IntegrationsView';
 import { EditSubscriberModal } from '@/src/components/dashboard/EditSubscriberModal';
 import { PointsFlowChart, RetentionForecastChart } from '@/src/components/dashboard/ChartComponents';
 import { RevenueView } from '@/src/components/dashboard/RevenueView';
+import { EmailHistoryView } from '@/src/components/dashboard/EmailHistoryView';
 
 // Types
 import {
@@ -668,6 +669,12 @@ const Dashboard: React.FC = () => {
         {
           activeTab === 'revenue' && (
             <RevenueView />
+          )
+        }
+
+        {
+          activeTab === 'logs' && (
+            <EmailHistoryView />
           )
         }
 

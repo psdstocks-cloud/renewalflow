@@ -17,6 +17,7 @@ import { checkDatabaseConnection } from './config/db';
 import { reportsRouter } from './routes/reports';
 import { revenueRouter } from './routes/revenue';
 import { trackingRouter } from './routes/tracking';
+import { emailsRouter } from './routes/emails';
 
 // GLOBAL ERROR HANDLERS - catch startup errors
 process.on('uncaughtException', (err) => {
@@ -111,6 +112,7 @@ const app = express();
     app.use(reportsRouter);
     app.use(revenueRouter);
     app.use(trackingRouter); // No auth - tracking pixels/links must work from email clients
+    app.use(emailsRouter);
 
     console.log('[Routes] Registered routes');
 
