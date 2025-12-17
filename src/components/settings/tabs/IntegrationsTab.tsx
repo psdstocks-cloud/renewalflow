@@ -48,7 +48,15 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
                 setIsSyncing(false);
                 // Refresh settings to get latest timestamps if completed
                 if (status.state === 'completed') {
-                    // Ideally trigger a refresh up the chain, but for now just stop polling
+                    // Fetch fresh settings to get the updated lastSync timestamp
+                    try {
+                        const freshSettings = await apiFetch<{ woo?: WooSettings }>('/api/settings');
+                        if (freshSettings.woo) {
+                            setWooSettings(freshSettings.woo);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to refresh settings after sync', e);
+                    }
                 }
             } else {
                 setIsSyncing(false);
