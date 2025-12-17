@@ -15,11 +15,13 @@ const envSchema = z.object({
   SUPABASE_JWT_SECRET: z.string().min(1, 'SUPABASE_JWT_SECRET is required'),
   SUPABASE_URL: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
-  SMTP_HOST: z.string().min(1, 'SMTP_HOST is required'),
+  // Email configuration - either BREVO_API_KEY or SMTP settings work
+  BREVO_API_KEY: z.string().optional(), // Preferred - uses HTTP API (port 443)
+  SMTP_HOST: z.string().optional(),     // Fallback - may be blocked on Railway
   SMTP_PORT: z.coerce.number().default(587),
-  SMTP_USER: z.string().min(1, 'SMTP_USER is required'),
-  SMTP_PASS: z.string().min(1, 'SMTP_PASS is required'),
-  SMTP_FROM_EMAIL: z.string().email('SMTP_FROM_EMAIL must be valid'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM_EMAIL: z.string().optional(),
   SMTP_FROM_NAME: z.string().optional(),
   FRONTEND_ORIGIN: z.string().optional(),
   ARTLY_API_SECRET: z.string().optional()

@@ -1,5 +1,6 @@
 import { transporter, defaultFrom } from '../config/mailer';
 import { env } from '../config/env';
+import { isBrevoApiAvailable, sendBrevoEmail } from './brevoService';
 
 export interface SendEmailPayload {
   to: string;
@@ -51,11 +52,31 @@ function rewriteLinksForTracking(html: string, emailLogId: string): string {
   });
 }
 
+type EmailResult = { success: boolean; method: 'BREVO_API' | 'SMTP'; error?: string };
+
 /**
- * Original sendEmail function (no tracking)
+ * Send email - tries Brevo HTTP API first, falls back to SMTP
  */
-export async function sendEmail(payload: SendEmailPayload) {
+export async function sendEmail(payload: SendEmailPayload): Promise<EmailResult> {
+  // Try Brevo HTTP API first (works on Railway, port 443)
+  if (isBrevoApiAvailable()) {
+    console.log(`[Email] Sending via Brevo HTTP API to ${payload.to}`);
+    const result = await sendBrevoEmail({
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text
+    });
+
+    if (result.success) {
+      return result;
+    }
+    console.warn(`[Email] Brevo API failed, trying SMTP fallback: ${result.error}`);
+  }
+
+  // Fallback to SMTP
   try {
+    console.log(`[Email] Sending via SMTP to ${payload.to}`);
     await transporter.sendMail({
       from: defaultFrom,
       to: payload.to,
@@ -63,25 +84,45 @@ export async function sendEmail(payload: SendEmailPayload) {
       html: payload.html,
       text: payload.text ?? payload.html.replace(/<[^>]+>/g, '')
     });
-    return { success: true as const, method: 'SMTP' as const };
+    return { success: true, method: 'SMTP' };
   } catch (error) {
-    return { success: false as const, method: 'SMTP' as const, error: error instanceof Error ? error.message : 'Unknown error' };
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Email] SMTP failed:`, errorMsg);
+    return { success: false, method: 'SMTP', error: errorMsg };
   }
 }
 
 /**
  * Send email with tracking (pixel + link tracking)
  * Requires emailLogId to be created first
+ * Uses Brevo HTTP API first, falls back to SMTP
  */
-export async function sendTrackedEmail(payload: SendTrackedEmailPayload) {
+export async function sendTrackedEmail(payload: SendTrackedEmailPayload): Promise<EmailResult> {
+  // 1. Inject tracking pixel
+  let trackedHtml = injectTrackingPixel(payload.html, payload.emailLogId);
+
+  // 2. Rewrite links for click tracking  
+  trackedHtml = rewriteLinksForTracking(trackedHtml, payload.emailLogId);
+
+  // 3. Try Brevo HTTP API first
+  if (isBrevoApiAvailable()) {
+    console.log(`[Email] Sending tracked email via Brevo API to ${payload.to}, emailLogId: ${payload.emailLogId}`);
+    const result = await sendBrevoEmail({
+      to: payload.to,
+      subject: payload.subject,
+      html: trackedHtml,
+      text: payload.text
+    });
+
+    if (result.success) {
+      return result;
+    }
+    console.warn(`[Email] Brevo API failed for tracked email, trying SMTP: ${result.error}`);
+  }
+
+  // 4. Fallback to SMTP
   try {
-    // 1. Inject tracking pixel
-    let trackedHtml = injectTrackingPixel(payload.html, payload.emailLogId);
-
-    // 2. Rewrite links for click tracking  
-    trackedHtml = rewriteLinksForTracking(trackedHtml, payload.emailLogId);
-
-    // 3. Send the email
+    console.log(`[Email] Sending tracked email via SMTP to ${payload.to}, emailLogId: ${payload.emailLogId}`);
     await transporter.sendMail({
       from: defaultFrom,
       to: payload.to,
@@ -89,11 +130,10 @@ export async function sendTrackedEmail(payload: SendTrackedEmailPayload) {
       html: trackedHtml,
       text: payload.text ?? payload.html.replace(/<[^>]+>/g, '')
     });
-
-    console.log(`[Email] Sent tracked email to ${payload.to}, emailLogId: ${payload.emailLogId}`);
-    return { success: true as const, method: 'SMTP' as const };
+    return { success: true, method: 'SMTP' };
   } catch (error) {
-    console.error(`[Email] Failed to send tracked email:`, error);
-    return { success: false as const, method: 'SMTP' as const, error: error instanceof Error ? error.message : 'Unknown error' };
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Email] SMTP failed for tracked email:`, errorMsg);
+    return { success: false, method: 'SMTP', error: errorMsg };
   }
 }
