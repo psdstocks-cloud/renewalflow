@@ -24,13 +24,29 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncStatus, setSyncStatus] = useState<WooSyncStatus | null>(null);
     const [copySuccess, setCopySuccess] = useState('');
+    const [isLoadingSettings, setIsLoadingSettings] = useState(true);
 
     // Connections UI State
     const [newUrl, setNewUrl] = useState('');
     const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-    // Initial Poll on Mount
+    // Fetch settings on mount to ensure we have the latest data
     React.useEffect(() => {
+        const loadSettings = async () => {
+            try {
+                setIsLoadingSettings(true);
+                const settings = await apiFetch<{ woo?: WooSettings }>('/api/settings');
+                if (settings.woo) {
+                    setWooSettings(settings.woo);
+                }
+            } catch (err) {
+                console.error('Failed to load settings', err);
+            } finally {
+                setIsLoadingSettings(false);
+            }
+        };
+
+        loadSettings();
         pollSyncStatus();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -126,8 +142,17 @@ export const IntegrationsTab: React.FC<IntegrationsTabProps> = ({
                                 <h3 className="font-bold text-white">WooCommerce</h3>
                                 <div className="flex flex-col mt-1">
                                     <div className="flex items-center gap-1.5">
-                                        <div className={`w-2 h-2 rounded-full ${wooSettings.url ? 'bg-emerald-400' : 'bg-red-500'}`}></div>
-                                        <span className="text-xs text-zinc-400">{wooSettings.url ? 'Connected' : 'Disconnected'}</span>
+                                        {isLoadingSettings ? (
+                                            <>
+                                                <i className="fas fa-circle-notch fa-spin text-zinc-400 text-xs"></i>
+                                                <span className="text-xs text-zinc-400">Checking...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className={`w-2 h-2 rounded-full ${wooSettings.url ? 'bg-emerald-400' : 'bg-red-500'}`}></div>
+                                                <span className="text-xs text-zinc-400">{wooSettings.url ? 'Connected' : 'Disconnected'}</span>
+                                            </>
+                                        )}
                                     </div>
                                     {lastSyncDate && (
                                         <span className="text-[10px] text-zinc-500 mt-0.5">
