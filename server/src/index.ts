@@ -16,6 +16,7 @@ import { startCronJobs } from './services/cronScheduler';
 import { checkDatabaseConnection } from './config/db';
 import { reportsRouter } from './routes/reports';
 import { revenueRouter } from './routes/revenue';
+import { trackingRouter } from './routes/tracking';
 
 // GLOBAL ERROR HANDLERS - catch startup errors
 process.on('uncaughtException', (err) => {
@@ -109,6 +110,7 @@ const app = express();
     app.use(cronRouter);
     app.use(reportsRouter);
     app.use(revenueRouter);
+    app.use(trackingRouter); // No auth - tracking pixels/links must work from email clients
 
     console.log('[Routes] Registered routes');
 

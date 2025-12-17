@@ -3,7 +3,7 @@ import { prisma } from '../config/db';
 import { ReminderTask, ReminderType } from '../types/index';
 import { getSettings } from './settingsService';
 import { generateReminderEmail } from './aiService';
-import { sendEmail } from './emailService';
+import { sendTrackedEmail } from './emailService';
 
 function buildTask(subscriber: any, type: ReminderType, daysUntilExpiry: number, reason: string): ReminderTask {
   return {
@@ -47,8 +47,8 @@ export async function sendReminderTask(task: ReminderTask, customInstructions?: 
 
   const { emailTemplate } = await getSettings();
   const { subject, body } = await generateReminderEmail(task, emailTemplate, customInstructions);
-  const emailResult = await sendEmail({ to: task.subscriber.email, subject, html: body });
 
+  // 1. Create EmailLog FIRST to get the ID for tracking
   const emailLog = await prisma.emailLog.create({
     data: {
       subscriberId: task.subscriber.id,
@@ -56,12 +56,30 @@ export async function sendReminderTask(task: ReminderTask, customInstructions?: 
       type: task.type,
       subject,
       body,
-      method: emailResult.method,
+      method: 'SMTP',
+      success: false, // Will update after sending
+      error: undefined
+    }
+  });
+
+  // 2. Send email WITH tracking (pixel + links)
+  const emailResult = await sendTrackedEmail({
+    to: task.subscriber.email,
+    subject,
+    html: body,
+    emailLogId: emailLog.id
+  });
+
+  // 3. Update EmailLog with result
+  await prisma.emailLog.update({
+    where: { id: emailLog.id },
+    data: {
       success: emailResult.success,
       error: emailResult.success ? undefined : emailResult.error
     }
   });
 
+  // 4. Update subscriber's last notified timestamp
   await prisma.subscriber.update({
     where: { id: task.subscriber.id },
     data: { lastNotifiedAt: new Date() }
@@ -69,6 +87,7 @@ export async function sendReminderTask(task: ReminderTask, customInstructions?: 
 
   return { task, emailLog, result: emailResult };
 }
+
 
 export async function sendReminderBatch(tasks: ReminderTask[], customInstructions?: string) {
   const summary = { total: tasks.length, success: 0, failed: 0 };
