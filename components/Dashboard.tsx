@@ -39,10 +39,20 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const { t } = useLanguage();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // --- State ---
-  const [activeTab, setActiveTab] = useState('overview'); // Default to overview to show charts
+  // Read initial tab from URL, default to 'overview'
+  const [activeTab, setActiveTab] = useState(() => {
+    const tabFromUrl = searchParams.get('tab');
+    return tabFromUrl || 'overview';
+  });
+
+  // Update URL when tab changes
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
+  };
 
   // Data State
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
@@ -203,7 +213,7 @@ const Dashboard: React.FC = () => {
 
   // --- Card Actions ---
   const handleCardClick = (type: 'active' | 'risk') => {
-    setActiveTab('subscribers');
+    handleTabChange('subscribers');
     setSubPage(1); // Reset to page 1
 
     if (type === 'active') {
@@ -553,7 +563,7 @@ const Dashboard: React.FC = () => {
 
   // --- Render ---
   return (
-    <DashboardLayout activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout}>
+    <DashboardLayout activeTab={activeTab} onTabChange={handleTabChange} onLogout={handleLogout}>
 
       {/* Overview Stats (Always Visible on Overview/Action tabs) */}
       {(activeTab === 'overview' || activeTab === 'action') && stats && (
