@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import { prisma } from '../config/db';
+import { generateReminderEmail } from '../services/aiService';
+import { sendEmail } from '../services/emailService';
+import { EmailTemplateConfig } from '../types';
 
 export const emailsRouter = Router();
 
@@ -205,3 +208,140 @@ emailsRouter.get('/api/emails/stats', async (req: Request, res: Response, next) 
         next(error);
     }
 });
+
+/**
+ * POST /api/emails/preview
+ * Generate a preview of the email using AI (sample data)
+ */
+emailsRouter.post('/api/emails/preview', async (req: Request, res: Response, next) => {
+    try {
+        const { template, subscriberData } = req.body;
+
+        if (!template) {
+            return res.status(400).json({ success: false, message: 'Template is required' });
+        }
+
+        // Create a mock task for preview generation
+        const mockTask = {
+            id: 'preview',
+            subscriberId: 'preview',
+            type: 'FIRST_REMINDER',
+            daysUntilExpiry: subscriberData?.daysUntilExpiry ?? 3,
+            reason: 'Preview',
+            subscriber: {
+                id: 'preview',
+                workspaceId: 'preview',
+                name: subscriberData?.name ?? 'Ahmed',
+                email: 'preview@example.com',
+                phone: null,
+                planName: subscriberData?.planName ?? 'Premium Plan',
+                amount: subscriberData?.amount ?? 299,
+                currency: subscriberData?.currency ?? 'EGP',
+                pointsRemaining: subscriberData?.pointsRemaining ?? 450,
+                status: 'ACTIVE',
+                startDate: new Date(),
+                endDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+                paymentLink: subscriberData?.paymentLink ?? 'https://example.com/renew',
+                lastNotifiedAt: null,
+                lastPurchaseDate: null,
+                createdAt: new Date(),
+                updatedAt: new Date()
+            }
+        } as any;
+
+        const emailTemplate: EmailTemplateConfig = {
+            subjectTemplate: template.subjectTemplate || 'Your subscription is expiring',
+            bodyTemplate: template.bodyTemplate || 'Hi {name}, your plan is expiring soon.',
+            context: template.context || ''
+        };
+
+        const { subject, body } = await generateReminderEmail(mockTask, emailTemplate);
+
+        res.json({
+            success: true,
+            preview: { subject, body }
+        });
+    } catch (error: any) {
+        console.error('Preview generation error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to generate preview'
+        });
+    }
+});
+
+/**
+ * POST /api/emails/test
+ * Send a test email to a specified address
+ */
+emailsRouter.post('/api/emails/test', async (req: Request, res: Response, next) => {
+    try {
+        const { to, template } = req.body;
+
+        if (!to) {
+            return res.status(400).json({ success: false, message: 'Email address is required' });
+        }
+
+        // Generate email content using AI (with sample data)
+        const mockTask = {
+            id: 'test',
+            subscriberId: 'test',
+            type: 'FIRST_REMINDER',
+            daysUntilExpiry: 3,
+            reason: 'Test Email',
+            subscriber: {
+                id: 'test',
+                workspaceId: 'test',
+                name: 'Test User',
+                email: to,
+                phone: null,
+                planName: 'Premium Plan',
+                amount: 299,
+                currency: 'EGP',
+                pointsRemaining: 450,
+                status: 'ACTIVE',
+                startDate: new Date(),
+                endDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+                paymentLink: 'https://example.com/renew',
+                lastNotifiedAt: null,
+                lastPurchaseDate: null,
+                createdAt: new Date(),
+                updatedAt: new Date()
+            }
+        } as any;
+
+        const emailTemplate: EmailTemplateConfig = template || {
+            subjectTemplate: 'Test Email from RenewalFlow',
+            bodyTemplate: 'Hi {name}, this is a test email.',
+            context: ''
+        };
+
+        const { subject, body } = await generateReminderEmail(mockTask, emailTemplate);
+
+        // Send the test email
+        const result = await sendEmail({
+            to,
+            subject: `[TEST] ${subject}`,
+            html: body
+        });
+
+        if (result.success) {
+            res.json({
+                success: true,
+                message: `Test email sent successfully to ${to} via ${result.method}`
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: result.error || 'Failed to send test email'
+            });
+        }
+    } catch (error: any) {
+        console.error('Test email error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to send test email'
+        });
+    }
+});
+
